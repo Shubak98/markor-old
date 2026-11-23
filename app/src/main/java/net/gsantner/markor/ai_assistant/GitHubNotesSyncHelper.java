@@ -704,11 +704,11 @@ public final class GitHubNotesSyncHelper {
             notifyProgress(callback, "Staged " + pending.path + " for one commit.");
         }
         for (String path : deletedPaths) {
-            final JSONObject entry = new JSONObject();
+            if (!remoteTree.files.containsKey(path)) {
+                continue;
+            }
             try {
-                entry.put("path", path);
-                entry.put("sha", JSONObject.NULL);
-                treeEntries.put(entry);
+                treeEntries.put(createDeletionTreeEntry(path));
             } catch (JSONException exception) {
                 throw new IOException("Could not prepare the GitHub deletion for " + path + ".",
                         exception);
@@ -718,7 +718,8 @@ public final class GitHubNotesSyncHelper {
 
         final JSONObject treeRequest = new JSONObject();
         try {
-            if (remoteTree.treeSha != null) {
+            if (remoteTree.treeSha != null
+                    && remoteTree.treeSha.matches("[0-9a-fA-F]{40}")) {
                 treeRequest.put("base_tree", remoteTree.treeSha);
             }
             treeRequest.put("tree", treeEntries);
@@ -747,6 +748,15 @@ public final class GitHubNotesSyncHelper {
                 commitResponse, "GitHub did not confirm the sync commit.");
         updateBranchReference(config, remoteTree.branchExists, commitSha);
         return new CommitSnapshot(commitSha, newTreeSha);
+    }
+
+    static JSONObject createDeletionTreeEntry(final String path) throws JSONException {
+        final JSONObject entry = new JSONObject();
+        entry.put("path", path);
+        entry.put("mode", "100644");
+        entry.put("type", "blob");
+        entry.put("sha", JSONObject.NULL);
+        return entry;
     }
 
     private List<String> uploadBlobs(final SyncConfig config,
@@ -947,7 +957,14 @@ public final class GitHubNotesSyncHelper {
             }
             final int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
-                throw new GitHubApiException(status);
+                String errorMessage;
+                try {
+                    errorMessage = readApiErrorMessage(connection);
+                } catch (IOException exception) {
+                    errorMessage = "Could not read GitHub error response: "
+                            + exception.getMessage();
+                }
+                throw new GitHubApiException(status, errorMessage);
             }
             final byte[] response = readStream(connection.getInputStream(), MAX_API_RESPONSE_BYTES);
             try {
@@ -958,6 +975,45 @@ public final class GitHubNotesSyncHelper {
         } finally {
             connection.disconnect();
         }
+    }
+
+    private static String readApiErrorMessage(final HttpURLConnection connection)
+            throws IOException {
+        final InputStream errorStream = connection.getErrorStream();
+        if (errorStream == null) {
+            return null;
+        }
+        final byte[] response;
+        try (InputStream input = errorStream;
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            final byte[] buffer = new byte[500];
+            int remaining = buffer.length;
+            while (remaining > 0) {
+                final int count = input.read(buffer, 0, remaining);
+                if (count < 0) {
+                    break;
+                }
+                if (count == 0) {
+                    continue;
+                }
+                output.write(buffer, 0, count);
+                remaining -= count;
+            }
+            response = output.toByteArray();
+        }
+        final String body = new String(response, StandardCharsets.UTF_8).trim();
+        if (body.isEmpty()) {
+            return null;
+        }
+        try {
+            final String message = new JSONObject(body).optString("message", "").trim();
+            if (!message.isEmpty()) {
+                return message;
+            }
+        } catch (JSONException ignored) {
+            // Return non-JSON error bodies as provided by the server.
+        }
+        return body;
     }
 
     private static byte[] readStream(final InputStream input, final long limit) throws IOException {
@@ -1530,8 +1586,10 @@ public final class GitHubNotesSyncHelper {
         private static final long serialVersionUID = 1L;
         private final int statusCode;
 
-        private GitHubApiException(final int statusCode) {
-            super("GitHub API request failed with HTTP " + statusCode + ".");
+        private GitHubApiException(final int statusCode, final String errorMessage) {
+            super("GitHub API HTTP " + statusCode
+                    + (errorMessage == null || errorMessage.isEmpty()
+                            ? "." : ": " + errorMessage));
             this.statusCode = statusCode;
         }
     }
