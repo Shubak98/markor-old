@@ -1,6 +1,10 @@
 package net.gsantner.markor.ai_assistant;
 
 import android.content.Context;
+import android.os.Build;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.Base64;
 
 import org.json.JSONArray;
@@ -223,14 +227,18 @@ public final class GitHubNotesSyncHelper {
         final Set<String> oversizedPaths = new HashSet<>(scan.oversizedPaths);
         oversizedPaths.addAll(oversizedRemotePaths);
         int skipped = oversizedPaths.size();
+        int unchangedSkipped = 0;
+        int modeSkipped = 0;
         int conflicts = 0;
         int completed = 0;
         final List<PlannedAction> actions = new ArrayList<>();
 
         for (String path : orderedPaths) {
+            completed++;
             final LocalFile local = scan.files.get(path);
             final RemoteFile remote = remoteFiles.get(path);
             if (oversizedPaths.contains(path)) {
+                notifyComparedProgress(callback, completed, orderedPaths.size());
                 continue;
             }
             final StateFile stateFile = state.files.get(path);
@@ -253,11 +261,11 @@ public final class GitHubNotesSyncHelper {
                     state.files.remove(path);
                 }
                 skipped++;
-                addEvent(events, callback, "↷ skipped: " + path);
+                unchangedSkipped++;
             } else if (action == SyncAction.PUSH) {
                 if (mode == SyncMode.PULL_ONLY) {
                     skipped++;
-                    addEvent(events, callback, "↷ skipped (Pull Only): " + path);
+                    modeSkipped++;
                 } else {
                     final String message = local == null ? null
                             : remote == null && previousSha != null
@@ -270,7 +278,7 @@ public final class GitHubNotesSyncHelper {
             } else if (action == SyncAction.PULL) {
                 if (mode == SyncMode.PUSH_ONLY) {
                     skipped++;
-                    addEvent(events, callback, "↷ skipped (Push Only): " + path);
+                    modeSkipped++;
                 } else {
                     final String message = local == null && previousSha != null
                             && !remote.sha.equals(previousSha)
@@ -289,9 +297,24 @@ public final class GitHubNotesSyncHelper {
                 addEvent(events, callback, (action == SyncAction.DELETE_REMOTE
                         ? "🗑 Delete from GitHub: " : "🗑 Delete from This Device: ") + path);
             }
-            completed++;
-            notifyProgress(callback, "Compared " + completed + " of " + orderedPaths.size()
-                    + " files.");
+            notifyComparedProgress(callback, completed, orderedPaths.size());
+        }
+        if (orderedPaths.isEmpty()) {
+            notifyComparedProgress(callback, 0, 0);
+        }
+        if (unchangedSkipped > 0 || modeSkipped > 0) {
+            final StringBuilder summary = new StringBuilder("↷ skipped: ");
+            if (unchangedSkipped > 0) {
+                summary.append(unchangedSkipped).append(" unchanged");
+            }
+            if (modeSkipped > 0) {
+                if (unchangedSkipped > 0) {
+                    summary.append(", ");
+                }
+                summary.append(modeSkipped).append(" excluded by sync mode");
+            }
+            summary.append(" files");
+            addEvent(events, callback, summary.toString());
         }
 
         return new SyncPlan(canonicalRoot, config, mode, remoteTree, actions, state,
@@ -314,24 +337,26 @@ public final class GitHubNotesSyncHelper {
             return new SyncReport(0, 0, 0, 0, plan.events, false, syncTime, 0, 0,
                     new ArrayList<String>(), new ArrayList<String>());
         }
-        if (plan.remoteTree.headSha != null) {
-            if (!plan.remoteTree.headSha.equals(fetchHeadCommit(plan.config))) {
-                throw new IOException("The GitHub repository changed after the sync preview. "
+        if (plan.hasDeletions()) {
+            if (plan.remoteTree.headSha != null) {
+                if (!plan.remoteTree.headSha.equals(fetchHeadCommit(plan.config))) {
+                    throw new IOException("The GitHub repository changed after the sync preview. "
+                            + "Run Sync Now again to review the latest changes.");
+                }
+            } else {
+                final TreeSnapshot latestTree = fetchTree(
+                        plan.config, new ArrayList<String>(), null, new HashSet<String>());
+                if (!same(plan.remoteTree.treeSha, latestTree.treeSha)
+                        || plan.remoteTree.branchExists != latestTree.branchExists) {
+                    throw new IOException("The GitHub repository changed after the sync preview. "
+                            + "Run Sync Now again to review the latest changes.");
+                }
+            }
+            final ScanResult latestLocal = scanLocal(plan.localRoot, plan.state);
+            if (!sameLocalSnapshot(plan, latestLocal)) {
+                throw new IOException("The local folder changed after the sync preview. "
                         + "Run Sync Now again to review the latest changes.");
             }
-        } else {
-            final TreeSnapshot latestTree = fetchTree(
-                    plan.config, new ArrayList<String>(), null, new HashSet<String>());
-            if (!same(plan.remoteTree.treeSha, latestTree.treeSha)
-                    || plan.remoteTree.branchExists != latestTree.branchExists) {
-                throw new IOException("The GitHub repository changed after the sync preview. "
-                        + "Run Sync Now again to review the latest changes.");
-            }
-        }
-        final ScanResult latestLocal = scanLocal(plan.localRoot, plan.state);
-        if (!sameLocalSnapshot(plan, latestLocal)) {
-            throw new IOException("The local folder changed after the sync preview. "
-                    + "Run Sync Now again to review the latest changes.");
         }
         plan.executed = true;
 
@@ -536,16 +561,19 @@ public final class GitHubNotesSyncHelper {
         return new TreeSnapshot(files, state.lastSyncedTreeSha, true, headSha);
     }
 
-    private ScanResult scanLocal(final File root, final SyncState state) throws IOException {
+    private ScanResult scanLocal(final File canonicalRoot, final SyncState state) throws IOException {
         final ScanResult result = new ScanResult();
-        scanDirectory(root, root, result, state, new HashSet<String>());
+        final String canonicalRootPath = canonicalRoot.getPath();
+        scanDirectory(canonicalRootPath, canonicalRoot, canonicalRootPath, "",
+                result, state, new HashSet<String>());
         return result;
     }
 
-    private void scanDirectory(final File root, final File directory, final ScanResult result,
-            final SyncState state, final Set<String> visitedDirectories) throws IOException {
-        final String directoryPath = directory.getCanonicalPath();
-        if (!isInsideRoot(root, directoryPath) || !visitedDirectories.add(directoryPath)) {
+    private void scanDirectory(final String canonicalRootPath, final File directory,
+            final String directoryCanonicalPath, final String directoryRelativePath,
+            final ScanResult result, final SyncState state,
+            final Set<String> visitedDirectories) throws IOException {
+        if (!visitedDirectories.add(directoryCanonicalPath)) {
             return;
         }
         final File[] children = directory.listFiles();
@@ -556,14 +584,24 @@ public final class GitHubNotesSyncHelper {
             if (child.getName().startsWith(".")) {
                 continue;
             }
-            final String canonicalPath = child.getCanonicalPath();
-            if (!isInsideRoot(root, canonicalPath)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                    && isSymbolicLink(child)) {
                 continue;
             }
             if (child.isDirectory()) {
-                scanDirectory(root, child, result, state, visitedDirectories);
+                final String childCanonicalPath = child.getCanonicalPath();
+                if (isInsideRoot(canonicalRootPath, childCanonicalPath)) {
+                    final String childRelativePath = appendRelativePath(
+                            directoryRelativePath, child.getName());
+                    scanDirectory(canonicalRootPath, child, childCanonicalPath,
+                            childRelativePath, result, state, visitedDirectories);
+                }
             } else if (child.isFile() && isSyncablePath(child.getName())) {
-                final String path = relativePath(root, child);
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP
+                        && !isInsideRoot(canonicalRootPath, child.getCanonicalPath())) {
+                    continue;
+                }
+                final String path = appendRelativePath(directoryRelativePath, child.getName());
                 if (child.length() > MAX_FILE_SIZE_BYTES) {
                     result.oversizedPaths.add(path);
                     result.messages.add("⚠ Skipped (>50 MB): " + path);
@@ -586,6 +624,30 @@ public final class GitHubNotesSyncHelper {
                     fileState.cachedLocalLastModified = local.lastModified;
                 }
             }
+        }
+    }
+
+    private static boolean isSymbolicLink(final File path) throws IOException {
+        try {
+            return OsConstants.S_ISLNK(Os.lstat(path.getPath()).st_mode);
+        } catch (ErrnoException exception) {
+            throw new IOException("Could not inspect a local sync path: " + path.getPath(),
+                    exception);
+        }
+    }
+
+    private static String appendRelativePath(final String parentRelPath, final String childName) {
+        return parentRelPath.isEmpty() ? childName : parentRelPath + "/" + childName;
+    }
+
+    static boolean shouldReportComparedProgress(final int completed, final int total) {
+        return completed % 100 == 0 || completed == total;
+    }
+
+    private static void notifyComparedProgress(final ProgressCallback callback,
+            final int completed, final int total) {
+        if (shouldReportComparedProgress(completed, total)) {
+            notifyProgress(callback, "Compared " + completed + " of " + total + " files.");
         }
     }
 
@@ -1181,9 +1243,13 @@ public final class GitHubNotesSyncHelper {
     }
 
     private static boolean isInsideRoot(final File root, final String canonicalPath) throws IOException {
-        final String rootPath = root.getCanonicalPath();
+        return isInsideRoot(root.getCanonicalPath(), canonicalPath);
+    }
+
+    private static boolean isInsideRoot(final String rootPath, final String canonicalPath) {
         return canonicalPath.equals(rootPath)
-                || canonicalPath.startsWith(rootPath + File.separator);
+                || canonicalPath.startsWith(rootPath.endsWith(File.separator)
+                        ? rootPath : rootPath + File.separator);
     }
 
     private static String relativePath(final File root, final File file) throws IOException {
