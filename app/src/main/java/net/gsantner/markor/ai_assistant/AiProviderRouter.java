@@ -1,0 +1,410 @@
+package net.gsantner.markor.ai_assistant;
+
+import java.io.IOException;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+
+public final class AiProviderRouter {
+    public enum Provider {
+        GEMINI("gemini", "Gemini", AiSettingsStore.DEFAULT_MODEL, ""),
+        GROQ("groq", "Groq", "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1"),
+        OPENROUTER("openrouter", "OpenRouter", "openrouter/free", "https://openrouter.ai/api/v1"),
+        CUSTOM("custom", "Custom", "", "");
+
+        private final String id;
+        private final String displayName;
+        private final String defaultModel;
+        private final String defaultBaseUrl;
+
+        Provider(final String id, final String displayName, final String defaultModel,
+                final String defaultBaseUrl) {
+            this.id = id;
+            this.displayName = displayName;
+            this.defaultModel = defaultModel;
+            this.defaultBaseUrl = defaultBaseUrl;
+        }
+
+        public String getId() {
+            return id;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+
+        public String getDefaultModel() {
+            return defaultModel;
+        }
+
+        public String getDefaultBaseUrl() {
+            return defaultBaseUrl;
+        }
+
+        public static Provider fromId(final String id) {
+            if (id == null) {
+                return null;
+            }
+            for (Provider provider : values()) {
+                if (provider.id.equals(id)) {
+                    return provider;
+                }
+            }
+            return null;
+        }
+    }
+
+    public interface ProviderRequest {
+        GeminiMarkdownHelper.IntentResult generate(ProviderConfig config) throws IOException;
+    }
+
+    private final AiSettingsStore settingsStore;
+
+    public AiProviderRouter(final AiSettingsStore settingsStore) {
+        this.settingsStore = settingsStore;
+    }
+
+    public Result generateIntent(final String markdown, final String instruction, final String selectedMode,
+            final String folderContext) throws IOException {
+        return generateIntent(markdown, instruction, selectedMode, folderContext, null);
+    }
+
+    public Result generateIntent(final String markdown, final String instruction, final String selectedMode,
+            final String folderContext, final String imageBase64) throws IOException {
+        List<ProviderConfig> configuredProviders = settingsStore.getProviderConfigs();
+        String primaryProvider = settingsStore.getPrimaryProvider();
+        final boolean autoFailoverEnabled = settingsStore.isAutoFailoverEnabled();
+        if (imageBase64 != null && !imageBase64.isEmpty()) {
+            final List<ProviderConfig> visionProviders = new ArrayList<>();
+            for (ProviderConfig config : configuredProviders) {
+                if (config != null && config.provider != Provider.GROQ) {
+                    visionProviders.add(config);
+                }
+            }
+            final List<ProviderConfig> visionChain =
+                    buildProviderChain(primaryProvider, true, visionProviders);
+            if (visionChain.isEmpty()) {
+                throw new IOException("Image attachments require Gemini or another vision-capable provider. "
+                        + "Configure one in AI Assistant settings; Groq is skipped for image requests.");
+            }
+            configuredProviders = visionProviders;
+            primaryProvider = visionChain.get(0).provider.getId();
+        }
+        return execute(configuredProviders, primaryProvider, autoFailoverEnabled, config -> {
+            final String selectedContext = config.provider == Provider.GROQ
+                    ? MarkdownChunker.selectContext(markdown, instruction,
+                            MarkdownChunker.MAX_GROQ_CONTEXT_CHARS,
+                            MarkdownChunker.MAX_GROQ_SELECTED_CONTEXT_CHARS)
+                    : MarkdownChunker.selectContext(markdown, instruction);
+            if (config.provider == Provider.GEMINI) {
+                return GeminiMarkdownHelper.generateIntent(config.apiKey, config.model,
+                        selectedContext, instruction, selectedMode, folderContext, imageBase64);
+            }
+            return OpenAiCompatibleHelper.generateIntent(config.provider.getDisplayName(),
+                    config.baseUrl, config.apiKey, config.model, selectedContext, instruction,
+                    selectedMode, folderContext, imageBase64);
+        });
+    }
+
+    public String generateStudyAnswer(final String markdown, final String instruction) throws IOException {
+        return generateStudyAnswer(markdown, instruction, null);
+    }
+
+    public String generateStudyAnswer(final String markdown, final String instruction,
+            final String imageBase64) throws IOException {
+        return generateIntent(markdown, instruction, "study", "", imageBase64)
+                .getIntentResult().getAnswer();
+    }
+
+    public String generateTeacherText(final String systemPrompt, final String userPrompt) throws IOException {
+        return generateRawCompletion(systemPrompt, userPrompt);
+    }
+
+    public String generateRawCompletion(final String systemPrompt, final String userPrompt)
+            throws IOException {
+        return execute(settingsStore.getProviderConfigs(), settingsStore.getPrimaryProvider(),
+                settingsStore.isAutoFailoverEnabled(), config ->
+                        rawIntentResult(config, systemPrompt, userPrompt))
+                .getIntentResult().getAnswer();
+    }
+
+    public String generateRawCompletion(final String markdown, final String systemPrompt,
+            final String instruction) throws IOException {
+        return execute(settingsStore.getProviderConfigs(), settingsStore.getPrimaryProvider(),
+                settingsStore.isAutoFailoverEnabled(), config -> {
+                    final String prompt;
+                    if (config.provider == Provider.GROQ) {
+                        final String selectedContext = MarkdownChunker.selectContext(
+                                markdown, instruction,
+                                MarkdownChunker.MAX_GROQ_CONTEXT_CHARS,
+                                MarkdownChunker.MAX_GROQ_SELECTED_CONTEXT_CHARS);
+                        prompt = instruction + "\n\nSection:\n" + selectedContext;
+                    } else {
+                        prompt = instruction + "\n\nSection:\n" + markdown;
+                    }
+                    return rawIntentResult(config, systemPrompt, prompt);
+                }).getIntentResult().getAnswer();
+    }
+
+    private static GeminiMarkdownHelper.IntentResult rawIntentResult(final ProviderConfig config,
+            final String systemPrompt, final String userPrompt) throws IOException {
+        final String answer;
+        if (config.provider == Provider.GEMINI) {
+            answer = GeminiMarkdownHelper.generateText(config.apiKey, config.model,
+                    systemPrompt, userPrompt);
+        } else {
+            answer = OpenAiCompatibleHelper.generateText(config.provider.getDisplayName(),
+                    config.baseUrl, config.apiKey, config.model, systemPrompt, userPrompt);
+        }
+        return new GeminiMarkdownHelper.IntentResult(
+                "answer", null, answer, null, null, null, null, null);
+    }
+
+    public static List<ProviderConfig> buildProviderChain(final String primaryProvider,
+            final boolean autoFailoverEnabled, final List<ProviderConfig> configuredProviders) {
+        final Map<Provider, ProviderConfig> configured = new EnumMap<>(Provider.class);
+        for (ProviderConfig config : configuredProviders) {
+            if (config != null && config.provider != null && !config.apiKey.trim().isEmpty()) {
+                configured.put(config.provider, config);
+            }
+        }
+        final List<ProviderConfig> chain = new ArrayList<>();
+        final Provider primary = Provider.fromId(primaryProvider);
+        if (primary != null && configured.containsKey(primary)) {
+            chain.add(configured.get(primary));
+        }
+        if (autoFailoverEnabled) {
+            for (Provider provider : Provider.values()) {
+                if (provider != primary && configured.containsKey(provider)) {
+                    chain.add(configured.get(provider));
+                }
+            }
+        }
+        return chain;
+    }
+
+    public static Result execute(final List<ProviderConfig> configuredProviders, final String primaryProvider,
+            final boolean autoFailoverEnabled, final ProviderRequest request) throws IOException {
+        final List<ProviderConfig> chain = buildProviderChain(
+                primaryProvider, autoFailoverEnabled, configuredProviders);
+        if (chain.isEmpty()) {
+            throw new IOException("No AI provider is configured. Add an API key in AI Assistant settings.");
+        }
+
+        final List<Failure> failures = new ArrayList<>();
+        for (int index = 0; index < chain.size(); index++) {
+            final ProviderConfig config = chain.get(index);
+            try {
+                final GeminiMarkdownHelper.IntentResult result = request.generate(config);
+                return new Result(result, config.provider.getDisplayName(),
+                        config.provider.getId(), config.model,
+                        failures.isEmpty() ? "" : buildFailoverNotice(config.provider, failures));
+            } catch (IOException exception) {
+                if (isRetryable(exception)) {
+                    failures.add(new Failure(config.provider, errorCode(exception),
+                            providerMessage(exception)));
+                    if (index + 1 < chain.size()) {
+                        continue;
+                    }
+                } else if (failures.isEmpty()) {
+                    throw providerError(config.provider, exception);
+                } else {
+                    failures.add(new Failure(config.provider, errorCode(exception),
+                            providerMessage(exception)));
+                }
+                throw combinedError(failures, exception);
+            }
+        }
+        throw new IOException("No AI provider returned a response.");
+    }
+
+    private static boolean isRetryable(final IOException exception) {
+        if (exception instanceof ProviderFailureException) {
+            final int status = ((ProviderFailureException) exception).getStatusCode();
+            return status == 413 || status == 429 || status >= 500 && status <= 599;
+        }
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof SocketTimeoutException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    private static String errorCode(final IOException exception) {
+        if (exception instanceof ProviderFailureException) {
+            return "HTTP " + ((ProviderFailureException) exception).getStatusCode();
+        }
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof SocketTimeoutException) {
+                return "timeout";
+            }
+            cause = cause.getCause();
+        }
+        return "request error";
+    }
+
+    private static IOException providerError(final Provider provider, final IOException exception) {
+        return new IOException(provider.getDisplayName() + " failed (" + errorCode(exception) + "): "
+                + exception.getMessage(), exception);
+    }
+
+    private static IOException combinedError(final List<Failure> failures, final IOException cause) {
+        final StringBuilder summary = new StringBuilder("All configured AI providers failed: ");
+        for (int index = 0; index < failures.size(); index++) {
+            if (index > 0) {
+                summary.append("; ");
+            }
+            final Failure failure = failures.get(index);
+            summary.append(failure.provider.getDisplayName()).append(' ').append(failure.code);
+            if (failure.providerMessage != null && !failure.providerMessage.isEmpty()) {
+                summary.append(" (").append(failure.providerMessage).append(')');
+            }
+        }
+        return new IOException(summary.append('.').toString(), cause);
+    }
+
+    private static String providerMessage(final IOException exception) {
+        return exception instanceof ProviderFailureException
+                ? ((ProviderFailureException) exception).getProviderMessage() : null;
+    }
+
+    private static String buildFailoverNotice(final Provider usedProvider, final List<Failure> failures) {
+        final StringBuilder notice = new StringBuilder("Used ").append(usedProvider.getDisplayName()).append(" (");
+        for (int index = 0; index < failures.size(); index++) {
+            if (index > 0) {
+                notice.append(", ");
+            }
+            final Failure failure = failures.get(index);
+            notice.append(failure.provider.getDisplayName());
+            if ("HTTP 429".equals(failure.code)) {
+                notice.append(" rate-limited");
+            } else if ("timeout".equals(failure.code)) {
+                notice.append(" timed out");
+            } else {
+                notice.append(' ').append(failure.code);
+            }
+            if (failure.providerMessage != null && !failure.providerMessage.isEmpty()) {
+                notice.append(": ").append(failure.providerMessage);
+            }
+        }
+        return notice.append(')').toString();
+    }
+
+    private static final class Failure {
+        private final Provider provider;
+        private final String code;
+        private final String providerMessage;
+
+        private Failure(final Provider provider, final String code, final String providerMessage) {
+            this.provider = provider;
+            this.code = code;
+            this.providerMessage = providerMessage;
+        }
+    }
+
+    public static final class ProviderConfig {
+        private final Provider provider;
+        private final String apiKey;
+        private final String model;
+        private final String baseUrl;
+
+        public ProviderConfig(final Provider provider, final String apiKey, final String model,
+                final String baseUrl) {
+            this.provider = provider;
+            this.apiKey = apiKey == null ? "" : apiKey.trim();
+            this.model = model == null ? "" : model.trim();
+            this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
+        }
+
+        public Provider getProvider() {
+            return provider;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public String getModel() {
+            return model;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+    }
+
+    public static final class Result {
+        private final GeminiMarkdownHelper.IntentResult intentResult;
+        private final String usedProviderName;
+        private final String usedProviderId;
+        private final String usedModelName;
+        private final String failoverNotice;
+
+        private Result(final GeminiMarkdownHelper.IntentResult intentResult,
+                final String usedProviderName, final String usedProviderId, final String usedModelName,
+                final String failoverNotice) {
+            this.intentResult = intentResult;
+            this.usedProviderName = usedProviderName;
+            this.usedProviderId = usedProviderId;
+            this.usedModelName = usedModelName;
+            this.failoverNotice = failoverNotice;
+        }
+
+        public GeminiMarkdownHelper.IntentResult getIntentResult() {
+            return intentResult;
+        }
+
+        public String getUsedProviderName() {
+            return usedProviderName;
+        }
+
+        public String getUsedProviderId() {
+            return usedProviderId;
+        }
+
+        public String getUsedModelName() {
+            return usedModelName;
+        }
+
+        public String getFailoverNotice() {
+            return failoverNotice;
+        }
+    }
+
+    public static final class ProviderFailureException extends IOException {
+        private static final long serialVersionUID = 1L;
+        private final String providerName;
+        private final int statusCode;
+        private final String providerMessage;
+
+        public ProviderFailureException(final String providerName, final int statusCode, final String message) {
+            this(providerName, statusCode, message, null);
+        }
+
+        public ProviderFailureException(final String providerName, final int statusCode, final String message,
+                final String providerMessage) {
+            super(message);
+            this.providerName = providerName;
+            this.statusCode = statusCode;
+            this.providerMessage = providerMessage;
+        }
+
+        public String getProviderName() {
+            return providerName;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+
+        public String getProviderMessage() {
+            return providerMessage;
+        }
+    }
+}
