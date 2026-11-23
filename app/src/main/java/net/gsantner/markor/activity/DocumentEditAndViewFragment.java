@@ -105,6 +105,9 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
     private MenuItem _saveMenuItem, _undoMenuItem, _redoMenuItem;
     private boolean _isPreviewVisible;
     private boolean _nextConvertToPrintMode = false;
+    // >>> AI_ASSISTANT_HOOK_START
+    private net.gsantner.markor.ai_assistant.AiAssistantModule aiAssistantModule;
+    // <<< AI_ASSISTANT_HOOK_END
 
     public DocumentEditAndViewFragment() {
         super();
@@ -113,6 +116,9 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
     @Override
     public void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // >>> AI_ASSISTANT_HOOK_START
+        aiAssistantModule = new net.gsantner.markor.ai_assistant.AiAssistantModule(this);
+        // <<< AI_ASSISTANT_HOOK_END
         final Bundle args = getArguments();
         if (savedInstanceState != null && savedInstanceState.containsKey(SAVESTATE_DOCUMENT)) {
             _document = (Document) savedInstanceState.getSerializable(SAVESTATE_DOCUMENT);
@@ -271,6 +277,35 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
 
         _editorHolder.invalidate();
         _editorHolder.post(() -> _hlEditor.setMinHeight(_editorHolder.getHeight()));
+
+        // >>> AI_ASSISTANT_HOOK_START
+        if (!_document.isBinaryFileNoTextLoading()) {
+            aiAssistantModule.attachFloatingButton(view, _hlEditor, _document.file,
+                    (target, result) -> {
+                        final String javascript = "(function(){var t="
+                                + org.json.JSONObject.quote(target)
+                                + ";var n=t.replace(/^#{1,6}\\s+/, '').trim();"
+                                + "var e=document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,td,th');"
+                                + "for(var i=0;i<e.length;i++){var x=(e[i].innerText||e[i].textContent||'').trim();"
+                                + "if(x===t||x===n){e[i].scrollIntoView({behavior:'smooth',block:'center'});return true;}}"
+                                + "return false;})()";
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                            _webView.evaluateJavascript(javascript,
+                                    value -> result.onResult("true".equals(value)));
+                        } else {
+                            _webView.loadUrl("javascript:" + javascript);
+                            result.onResult(true);
+                        }
+                    },
+                    file -> DocumentActivity.launch(getActivity(), file, null, null),
+                    () -> {
+                        if (saveDocument(false) && _isPreviewVisible) {
+                            updateViewModeText();
+                        }
+                    });
+        }
+        aiAssistantModule.setViewModeVisible(_isPreviewVisible);
+        // <<< AI_ASSISTANT_HOOK_END
     }
 
     @Override
@@ -312,6 +347,15 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
 
         final boolean isExperimentalFeaturesEnabled = _appSettings.isExperimentalFeaturesEnabled();
         final boolean isText = !_document.isBinaryFileNoTextLoading();
+
+        // >>> AI_ASSISTANT_HOOK_START
+        final MenuItem aiEditItem = menu.add(Menu.NONE, Menu.NONE, Menu.NONE, "AI Edit");
+        aiEditItem.setVisible(isText && !_isPreviewVisible);
+        aiEditItem.setOnMenuItemClickListener(item -> {
+            aiAssistantModule.openEditorDialog(_hlEditor);
+            return true;
+        });
+        // <<< AI_ASSISTANT_HOOK_END
 
         menu.findItem(R.id.action_undo).setVisible(isText && _appSettings.isEditorHistoryEnabled());
         menu.findItem(R.id.action_redo).setVisible(isText && _appSettings.isEditorHistoryEnabled());
@@ -880,6 +924,9 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
 
         _nextConvertToPrintMode = false;
         _isPreviewVisible = show;
+        // >>> AI_ASSISTANT_HOOK_START
+        aiAssistantModule.setViewModeVisible(show);
+        // <<< AI_ASSISTANT_HOOK_END
 
         ((AppCompatActivity) activity).supportInvalidateOptionsMenu();
     }
