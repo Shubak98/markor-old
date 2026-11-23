@@ -19,6 +19,14 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: Configure debug signing key
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p "$HOME/.android" && echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          fi
+
       - name: Build debug APK
         run: |
           chmod +x gradlew
