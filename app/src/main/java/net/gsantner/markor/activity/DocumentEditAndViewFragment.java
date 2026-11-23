@@ -257,26 +257,6 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
                 }
             });
         }
-    }
-
-    @Override
-    protected void onFragmentFirstTimeVisible() {
-        final Bundle args = getArguments();
-        int startPos = _appSettings.getLastEditPosition(_document.path, _hlEditor.length());
-        if (args != null && args.containsKey(Document.EXTRA_FILE_LINE_NUMBER)) {
-            final int lno = args.getInt(Document.EXTRA_FILE_LINE_NUMBER);
-            if (lno >= 0) {
-                startPos = TextViewUtils.getIndexFromLineOffset(_hlEditor.getText(), lno, 0);
-            } else {
-                startPos = _hlEditor.length();
-            }
-        }
-
-        _hlEditor.recomputeHighlighting(); // Run before setting scroll position
-        TextViewUtils.setSelectionAndShow(_hlEditor, startPos);
-
-        _editorHolder.invalidate();
-        _editorHolder.post(() -> _hlEditor.setMinHeight(_editorHolder.getHeight()));
 
         // >>> AI_ASSISTANT_HOOK_START
         if (!_document.isBinaryFileNoTextLoading()) {
@@ -306,6 +286,26 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
         }
         aiAssistantModule.setViewModeVisible(_isPreviewVisible);
         // <<< AI_ASSISTANT_HOOK_END
+    }
+
+    @Override
+    protected void onFragmentFirstTimeVisible() {
+        final Bundle args = getArguments();
+        int startPos = _appSettings.getLastEditPosition(_document.path, _hlEditor.length());
+        if (args != null && args.containsKey(Document.EXTRA_FILE_LINE_NUMBER)) {
+            final int lno = args.getInt(Document.EXTRA_FILE_LINE_NUMBER);
+            if (lno >= 0) {
+                startPos = TextViewUtils.getIndexFromLineOffset(_hlEditor.getText(), lno, 0);
+            } else {
+                startPos = _hlEditor.length();
+            }
+        }
+
+        _hlEditor.recomputeHighlighting(); // Run before setting scroll position
+        TextViewUtils.setSelectionAndShow(_hlEditor, startPos);
+
+        _editorHolder.invalidate();
+        _editorHolder.post(() -> _hlEditor.setMinHeight(_editorHolder.getHeight()));
     }
 
     @Override
