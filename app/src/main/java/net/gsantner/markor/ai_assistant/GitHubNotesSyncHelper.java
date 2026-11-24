@@ -333,6 +333,7 @@ public final class GitHubNotesSyncHelper {
             plan.executed = true;
             final long syncTime = System.currentTimeMillis();
             writeState(plan.state, plan.config, plan.localRoot);
+            settingsStore.saveGitHubLocalRootIfEmpty(plan.localRoot.getAbsolutePath());
             settingsStore.saveGitHubLastSyncMs(syncTime);
             return new SyncReport(0, 0, 0, 0, plan.events, false, syncTime, 0, 0,
                     new ArrayList<String>(), new ArrayList<String>());
@@ -472,6 +473,7 @@ public final class GitHubNotesSyncHelper {
         }
         writeState(plan.state, plan.config, plan.localRoot);
         final long syncTime = System.currentTimeMillis();
+        settingsStore.saveGitHubLocalRootIfEmpty(plan.localRoot.getAbsolutePath());
         settingsStore.saveGitHubLastSyncMs(syncTime);
         addEvent(events, callback, "🗑 Remote: " + remoteDeleted);
         addEvent(events, callback, "🗑 Local: " + localDeleted);

@@ -53,6 +53,18 @@ public final class AiMnemonicsDialog {
         dialog.setCanceledOnTouchOutside(true);
     }
 
+    public static void showVault(final Context context, final AiMnemonicsStore store,
+            final Actions actions) {
+        final LinearLayout body = new LinearLayout(context);
+        body.setOrientation(LinearLayout.VERTICAL);
+        renderVault(context, body, null, store, actions);
+        final LinearLayout footer = AiUiTheme.actionRow(context);
+        final Button close = AiUiTheme.button(context, "Close", AiUiTheme.ButtonKind.SECONDARY);
+        footer.addView(close, AiUiTheme.weightedButtonParams(context));
+        final Dialog dialog = AiUiTheme.showDialog(context, "Mnemonics Vault", body, footer, null);
+        close.setOnClickListener(view -> dialog.dismiss());
+    }
+
     private static LinearLayout tabs(final Context context, final String markdown, final File file,
             final AiMnemonicsStore store, final Generator generator, final Actions actions) {
         final LinearLayout root = new LinearLayout(context);
@@ -197,33 +209,37 @@ public final class AiMnemonicsDialog {
             final File file, final AiMnemonicsStore store, final Actions actions) {
         vault.removeAllViews();
         final LinearLayout filters = AiUiTheme.actionRow(context);
-        final List<AiMnemonicsStore.Entry> thisFileEntries =
-                safeFilter(store, file.getAbsolutePath());
         final List<AiMnemonicsStore.Entry> allFileEntries = safeAll(store);
-        final TextView thisFile = tab(context,
-                "This File (" + thisFileEntries.size() + ")", true);
         final TextView allFiles = tab(context,
-                "All Files (" + allFileEntries.size() + ")", false);
-        filters.addView(thisFile, weighted(context));
+                "All Files (" + allFileEntries.size() + ")", file == null);
+        final TextView thisFile = file == null ? null : tab(context,
+                "This File (" + safeFilter(store, file.getAbsolutePath()).size() + ")", true);
+        if (thisFile != null) {
+            filters.addView(thisFile, weighted(context));
+        }
         filters.addView(allFiles, weighted(context));
         vault.addView(filters);
         final LinearLayout cards = new LinearLayout(context);
         cards.setOrientation(LinearLayout.VERTICAL);
         vault.addView(cards);
 
-        thisFile.setOnClickListener(view -> {
-            styleTab(thisFile, true);
-            styleTab(allFiles, false);
-            renderCards(context, cards, safeFilter(store, file.getAbsolutePath()),
-                    file, store, actions);
-        });
+        if (thisFile != null) {
+            thisFile.setOnClickListener(view -> {
+                styleTab(thisFile, true);
+                styleTab(allFiles, false);
+                renderCards(context, cards, safeFilter(store, file.getAbsolutePath()),
+                        file, store, actions);
+            });
+        }
         allFiles.setOnClickListener(view -> {
-            styleTab(thisFile, false);
+            if (thisFile != null) {
+                styleTab(thisFile, false);
+            }
             styleTab(allFiles, true);
             renderCards(context, cards, safeAll(store), file, store, actions);
         });
-        renderCards(context, cards, safeFilter(store, file.getAbsolutePath()),
-                file, store, actions);
+        renderCards(context, cards, file == null ? allFileEntries
+                : safeFilter(store, file.getAbsolutePath()), file, store, actions);
     }
 
     private static void renderCards(final Context context, final LinearLayout cards,

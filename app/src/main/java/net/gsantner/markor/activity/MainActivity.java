@@ -34,6 +34,7 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 import net.gsantner.markor.BuildConfig;
 import net.gsantner.markor.R;
+import net.gsantner.markor.ai_assistant.AiAssistantModule;
 import net.gsantner.markor.frontend.NewFileDialog;
 import net.gsantner.markor.frontend.filebrowser.MarkorFileBrowserFactory;
 import net.gsantner.markor.model.Document;
@@ -56,6 +57,8 @@ import other.writeily.widget.WrMarkorWidgetProvider;
 public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFragment.FilesystemFragmentOptionsListener {
 
     public static boolean IS_DEBUG_ENABLED = false;
+    private static final int MENU_AI_ASSISTANT = Menu.FIRST + 40;
+    private static final int MENU_GITHUB_SYNC = Menu.FIRST + 41;
 
     private BottomNavigationView _bottomNav;
     private ViewPager2 _viewPager;
@@ -63,6 +66,7 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
     private DocumentEditAndViewFragment _quicknote, _todo;
     private MoreFragment _more;
     private FloatingActionButton _fab;
+    private AiAssistantModule _aiAssistantModule;
 
     private MarkorContextUtils _cu;
     private File _quickSwitchPrevFolder = null;
@@ -80,6 +84,8 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
         }
 
         _cu = new MarkorContextUtils(this);
+        _aiAssistantModule = new AiAssistantModule(this, this,
+                file -> DocumentActivity.launch(MainActivity.this, file, false, null));
         setContentView(R.layout.main__activity);
         _bottomNav = findViewById(R.id.bottom_navigation_bar);
         _viewPager = findViewById(R.id.main__view_pager_container);
@@ -229,6 +235,16 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
             _cu.animateToActivity(this, SettingsActivity.class, false, null);
             return true;
         }
+        // >>> AI_ASSISTANT_HOOK_START
+        if (item.getItemId() == MENU_AI_ASSISTANT) {
+            _aiAssistantModule.openMainAssistantDialog();
+            return true;
+        }
+        if (item.getItemId() == MENU_GITHUB_SYNC) {
+            _aiAssistantModule.openGitHubSyncDialog();
+            return true;
+        }
+        // <<< AI_ASSISTANT_HOOK_END
         return false;
     }
 
@@ -236,6 +252,15 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
     public boolean onCreateOptionsMenu(final Menu menu) {
         getMenuInflater().inflate(R.menu.main__menu, menu);
         menu.findItem(R.id.action_settings).setVisible(_appSettings.isShowSettingsOptionInMainToolbar());
+
+        // >>> AI_ASSISTANT_HOOK_START
+        final MenuItem aiAssistantItem =
+                menu.add(Menu.NONE, MENU_AI_ASSISTANT, Menu.NONE, "✦ AI Assistant");
+        aiAssistantItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+        final MenuItem githubSyncItem =
+                menu.add(Menu.NONE, MENU_GITHUB_SYNC, Menu.NONE, "☁ GitHub Sync");
+        githubSyncItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+        // <<< AI_ASSISTANT_HOOK_END
 
         _cu.tintMenuItems(menu, true, Color.WHITE);
         _cu.setSubMenuIconsVisibility(menu, true);

@@ -1,5 +1,53 @@
 # AI Assistant portability
 
+## Add the main-screen overflow shortcuts
+
+Import `AiAssistantModule` in `MainActivity.java`, add the field to the activity, and
+initialize it in `onCreate` after `_cu` is initialized. `MainActivity` implements
+`ActivityResultCaller`, so the assistant's voice and file-picker launchers are registered
+before the activity is started:
+
+```java
+import net.gsantner.markor.ai_assistant.AiAssistantModule;
+
+private AiAssistantModule _aiAssistantModule;
+
+_aiAssistantModule = new AiAssistantModule(this, this,
+        file -> DocumentActivity.launch(MainActivity.this, file, false, null));
+```
+
+Add these exact marked blocks to `onOptionsItemSelected` and `onCreateOptionsMenu`.
+The IDs are activity constants (`Menu.FIRST + 40` and `Menu.FIRST + 41`):
+
+```java
+// >>> AI_ASSISTANT_HOOK_START
+if (item.getItemId() == MENU_AI_ASSISTANT) {
+    _aiAssistantModule.openMainAssistantDialog();
+    return true;
+}
+if (item.getItemId() == MENU_GITHUB_SYNC) {
+    _aiAssistantModule.openGitHubSyncDialog();
+    return true;
+}
+// <<< AI_ASSISTANT_HOOK_END
+```
+
+```java
+// >>> AI_ASSISTANT_HOOK_START
+final MenuItem aiAssistantItem =
+        menu.add(Menu.NONE, MENU_AI_ASSISTANT, Menu.NONE, "✦ AI Assistant");
+aiAssistantItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+final MenuItem githubSyncItem =
+        menu.add(Menu.NONE, MENU_GITHUB_SYNC, Menu.NONE, "☁ GitHub Sync");
+githubSyncItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+// <<< AI_ASSISTANT_HOOK_END
+```
+
+The no-file assistant entry still supports Folder Search, New Note, the global
+Mnemonics Vault, settings, and GitHub Sync. Edit, Jump, and note-based study modes
+explain that a note must be open. An unset sync folder always resolves to Markor's
+Notebook root, and the Sync dialog displays the resolved path.
+
 ## Copy the module
 
 Copy the entire `app/src/main/java/net/gsantner/markor/ai_assistant/` folder into the same path in the new Markor repository. No resource, XML, Gradle, or settings-file changes are required. The folder now includes large-note context selection, gallery image encoding and vision requests, tutor and quiz dialogs, Anki CSV generation, and Mermaid insertion.

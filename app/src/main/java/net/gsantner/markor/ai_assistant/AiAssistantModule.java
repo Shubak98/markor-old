@@ -35,9 +35,12 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResult;
+import androidx.activity.result.ActivityResultCaller;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.fragment.app.Fragment;
+
+import net.gsantner.markor.ApplicationObject;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -88,6 +91,7 @@ public final class AiAssistantModule {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     private final Fragment fragment;
+    private final android.content.Context hostContext;
     private final ActivityResultLauncher<Intent> voiceLauncher;
     private final ActivityResultLauncher<String> imageLauncher;
     private final ActivityResultLauncher<String> settingsImportLauncher;
@@ -106,9 +110,10 @@ public final class AiAssistantModule {
 
     public AiAssistantModule(final Fragment fragment) {
         this.fragment = fragment;
-        settingsStore = new AiSettingsStore(fragment.requireContext());
-        diffHistoryStore = new AiDiffHistoryStore(fragment.requireContext());
-        mnemonicsStore = new AiMnemonicsStore(fragment.requireContext());
+        hostContext = fragment.requireContext();
+        settingsStore = new AiSettingsStore(hostContext);
+        diffHistoryStore = new AiDiffHistoryStore(hostContext);
+        mnemonicsStore = new AiMnemonicsStore(hostContext);
         voiceLauncher = fragment.registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(), this::onVoiceResult);
         imageLauncher = fragment.registerForActivityResult(
@@ -117,10 +122,53 @@ public final class AiAssistantModule {
                 new ActivityResultContracts.GetContent(), this::onSettingsImportPicked);
     }
 
+    public AiAssistantModule(final ActivityResultCaller resultCaller,
+            final android.content.Context context,
+            final OpenFileCallback openFileCallback) {
+        if (resultCaller == null || context == null) {
+            throw new IllegalArgumentException("Activity result caller and context are required.");
+        }
+        fragment = null;
+        hostContext = context;
+        this.openFileCallback = openFileCallback;
+        settingsStore = new AiSettingsStore(context);
+        diffHistoryStore = new AiDiffHistoryStore(context);
+        mnemonicsStore = new AiMnemonicsStore(context);
+        voiceLauncher = resultCaller.registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(), this::onVoiceResult);
+        imageLauncher = resultCaller.registerForActivityResult(
+                new ActivityResultContracts.GetContent(), this::onImageSelected);
+        settingsImportLauncher = resultCaller.registerForActivityResult(
+                new ActivityResultContracts.GetContent(), this::onSettingsImportPicked);
+    }
+
+    public void openMainAssistantDialog() {
+        currentFile = null;
+        scrollCallback = null;
+        final android.content.Context context = getContext();
+        if (context == null) {
+            return;
+        }
+        openEditorDialog(new EditText(context));
+    }
+
+    public void openGitHubSyncDialog() {
+        currentFile = null;
+        showGitHubSyncDialog(getContext(), null);
+    }
+
+    private android.content.Context getContext() {
+        return fragment == null ? hostContext : fragment.getContext();
+    }
+
+    private File getNotebookRoot() {
+        return ApplicationObject.settings().getNotebookDirectory();
+    }
+
     public void attachFloatingButton(final View rootView, final EditText editText, final File currentFile,
             final ScrollCallback scrollCallback, final OpenFileCallback openFileCallback,
             final Runnable onAfterApply) {
-        if (fragment.getContext() == null || rootView == null || editText == null) {
+        if (getContext() == null || rootView == null || editText == null) {
             return;
         }
         if (!(rootView instanceof FrameLayout)) {
@@ -134,7 +182,10 @@ public final class AiAssistantModule {
         this.openFileCallback = openFileCallback;
         this.onAfterApply = onAfterApply == null ? () -> { } : onAfterApply;
 
-        final android.content.Context context = fragment.requireContext();
+        final android.content.Context context = getContext();
+        if (context == null) {
+            return;
+        }
         final TextView button = new TextView(context);
         button.setText("AI");
         button.setTextColor(Color.WHITE);
@@ -171,13 +222,23 @@ public final class AiAssistantModule {
     }
 
     public void openEditorDialog(final EditText editText) {
-        if (fragment.getContext() == null || editText == null || currentFile == null) {
+        if (getContext() == null || editText == null) {
             return;
         }
-        final android.content.Context context = fragment.requireContext();
+        final android.content.Context context = getContext();
+        if (context == null) {
+            return;
+        }
         final LinearLayout content = verticalLayout(context);
         final String[] selectedMode = {"auto"};
-        addModeChips(context, content, selectedMode);
+        addModeChips(context, content, selectedMode, currentFile != null);
+        if (currentFile == null) {
+            final TextView availability = AiUiTheme.label(context,
+                    "No file is open. Edit, Jump, and note-based study actions require an open note. "
+                            + "Folder Search and New Note use the Notebook root.", 12);
+            availability.setTextColor(AiUiTheme.SECONDARY_TEXT);
+            content.addView(availability);
+        }
         final String[] attachedImage = {null};
         final TextView imageChip = AiUiTheme.label(context, "📷 Image attached  ✕", 12);
         imageChip.setTextColor(AiUiTheme.ACCENT);
@@ -244,6 +305,8 @@ public final class AiAssistantModule {
         settingsButton.setContentDescription("Settings");
         final TextView allDiffsButton = createAllDiffsButton(context);
         final TextView syncButton = createSyncButton(context);
+        final TextView vaultButton = AiUiTheme.headerAction(context, "Vault");
+        vaultButton.setContentDescription("Mnemonics Vault");
         final LinearLayout headerActions = AiUiTheme.actionRow(context);
         final LinearLayout.LayoutParams allDiffsParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36));
@@ -253,6 +316,8 @@ public final class AiAssistantModule {
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36));
         syncParams.setMargins(0, 0, dp(context, 6), 0);
         headerActions.addView(syncButton, syncParams);
+        headerActions.addView(vaultButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
         headerActions.addView(settingsButton, new LinearLayout.LayoutParams(
                 dp(context, 40), dp(context, 40)));
         IOException historyReadError = null;
@@ -276,6 +341,7 @@ public final class AiAssistantModule {
             imageChip.setVisibility(View.VISIBLE);
         }));
         settingsButton.setOnClickListener(view -> showSettingsDialog());
+        vaultButton.setOnClickListener(view -> showMnemonicsVault(context));
         allDiffsButton.setOnClickListener(view -> showAllDiffsDialog(context, editText, allDiffsButton));
         syncButton.setOnClickListener(view -> showGitHubSyncDialog(context, editText));
         cancelButton.setOnClickListener(view -> dialog.dismiss());
@@ -338,7 +404,7 @@ public final class AiAssistantModule {
                         final List<AiStudyDialogs.Question> questions = AiStudyDialogs.parseQuiz(rawQuiz);
                         MAIN_HANDLER.post(() -> {
                             dialog.dismiss();
-                            if (fragment.getContext() != null) {
+                            if (getContext() != null) {
                                 AiStudyDialogs.showQuiz(context, questions,
                                         text -> appendToNotePreview(editText, originalMarkdown, text,
                                                 instruction, "quiz", ""));
@@ -355,7 +421,7 @@ public final class AiAssistantModule {
                         final String csv = AnkiCsvHelper.toCsv(cards);
                         MAIN_HANDLER.post(() -> {
                             dialog.dismiss();
-                            if (fragment.getContext() != null) {
+                            if (getContext() != null) {
                                 showAnkiPreview(context, cards, csv);
                             }
                         });
@@ -371,7 +437,7 @@ public final class AiAssistantModule {
                         final String markdownDiagram = formatMermaid(diagram);
                         MAIN_HANDLER.post(() -> {
                             dialog.dismiss();
-                            if (fragment.getContext() != null) {
+                            if (getContext() != null) {
                                 appendToNotePreview(editText, originalMarkdown,
                                         "\n\n" + markdownDiagram, instruction, "diagram", "");
                             }
@@ -382,7 +448,8 @@ public final class AiAssistantModule {
                             || ("auto".equals(requestedMode)
                             && FolderSearchHelper.isFolderSearchQuery(instruction));
                     final FolderSearchHelper.SearchResult folderResults = searchFolder
-                            ? FolderSearchHelper.search(currentFile.getParentFile(), instruction) : null;
+                            ? FolderSearchHelper.search(currentFile == null
+                                    ? getNotebookRoot() : currentFile.getParentFile(), instruction) : null;
                     final String folderContext = folderResults == null ? ""
                             : folderResults.getContext().isEmpty()
                             ? "No relevant .md or .txt files matched the query in this folder."
@@ -406,7 +473,7 @@ public final class AiAssistantModule {
                             : null;
                     MAIN_HANDLER.post(() -> {
                         dialog.dismiss();
-                        if (fragment.getContext() != null) {
+                        if (getContext() != null) {
                             if (!providerResult.getFailoverNotice().isEmpty()) {
                                 Toast.makeText(context, providerResult.getFailoverNotice(),
                                         Toast.LENGTH_SHORT).show();
@@ -418,7 +485,7 @@ public final class AiAssistantModule {
                     });
                 } catch (IOException exception) {
                     MAIN_HANDLER.post(() -> {
-                        if (!dialog.isShowing() || fragment.getContext() == null) {
+                        if (!dialog.isShowing() || getContext() == null) {
                             return;
                         }
                         progress.setVisibility(View.GONE);
@@ -456,7 +523,7 @@ public final class AiAssistantModule {
     }
 
     private static void addModeChips(final android.content.Context context, final LinearLayout parent,
-            final String[] selectedMode) {
+            final String[] selectedMode, final boolean hasCurrentFile) {
         final String[][] modes = {
                 {"auto", "Auto"}, {"teacher", "AI Teacher"}, {"mnemonics", "Mnemonics"}, {"edit", "Edit"},
                 {"study", "Ask / Study"},
@@ -478,7 +545,21 @@ public final class AiAssistantModule {
             chip.setGravity(Gravity.CENTER);
             AiUiTheme.styleChip(chip, modeIndex == 0);
             final String chipMode = mode[0];
+            final boolean requiresCurrentFile = "teacher".equals(chipMode)
+                    || "mnemonics".equals(chipMode) || "edit".equals(chipMode)
+                    || "jump".equals(chipMode) || "tutor".equals(chipMode)
+                    || "quiz".equals(chipMode) || "anki".equals(chipMode)
+                    || "diagram".equals(chipMode);
+            if (!hasCurrentFile && requiresCurrentFile) {
+                chip.setAlpha(0.45f);
+                chip.setContentDescription(mode[1] + ", open a note to use this action");
+            }
             chip.setOnClickListener(view -> {
+                if (!hasCurrentFile && requiresCurrentFile) {
+                    Toast.makeText(context, "Open a note to use " + mode[1] + ".",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 selectedMode[0] = chipMode;
                 for (int index = 0; index < chips.length; index++) {
                     AiUiTheme.styleChip(chips[index], modes[index][0].equals(selectedMode[0]));
@@ -532,12 +613,19 @@ public final class AiAssistantModule {
     }
 
     private void updateAllDiffsButton(final TextView button) throws IOException {
+        if (currentFile == null) {
+            button.setVisibility(View.GONE);
+            return;
+        }
         final int count = diffHistoryStore.getHistory(currentFile).size();
         button.setText(count == 0 ? "All Diffs" : "All Diffs (" + count + ")");
         button.setContentDescription("All Diffs, " + count + " saved edits");
     }
 
     private void showGitHubSyncDialog(final android.content.Context context, final EditText editText) {
+        if (context == null) {
+            return;
+        }
         final LinearLayout shell = verticalLayout(context);
         shell.setBackground(AiUiTheme.cardBackground(context));
 
@@ -676,7 +764,11 @@ public final class AiAssistantModule {
         final String formatted = lastSyncMs <= 0 ? "Never"
                 : new SimpleDateFormat("MMM d, yyyy h:mm a", Locale.getDefault())
                         .format(new Date(lastSyncMs));
-        lastSyncLine.setText("Last synced: " + formatted);
+        final String configuredRoot = settingsStore.getGitHubLocalRoot();
+        final File localRoot = configuredRoot.isEmpty()
+                ? getNotebookRoot() : new File(configuredRoot);
+        lastSyncLine.setText("Sync root: " + localRoot.getAbsolutePath()
+                + "\nLast synced: " + formatted);
     }
 
     private void runGitHubSync(final android.content.Context context, final EditText editText,
@@ -691,7 +783,7 @@ public final class AiAssistantModule {
         }
         final String localRootValue = settingsStore.getGitHubLocalRoot();
         final File localRoot = localRootValue.isEmpty()
-                ? currentFile == null ? null : currentFile.getParentFile()
+                ? getNotebookRoot()
                 : new File(localRootValue);
         final GitHubNotesSyncHelper.SyncConfig config = new GitHubNotesSyncHelper.SyncConfig(
                 settingsStore.getGitHubPat(), settingsStore.getGitHubRepo(),
@@ -714,7 +806,7 @@ public final class AiAssistantModule {
                 final GitHubNotesSyncHelper.SyncPlan plan = helper.planSync(
                         localRoot, config, mode, progressCallback);
                 MAIN_HANDLER.post(() -> {
-                    if (!dialog.isShowing() || fragment.getContext() == null) {
+                    if (!dialog.isShowing() || getContext() == null) {
                         return;
                     }
                     if (mode == GitHubNotesSyncHelper.SyncMode.TWO_WAY && plan.hasDeletions()) {
@@ -775,7 +867,7 @@ public final class AiAssistantModule {
                 final String currentFileContent = updatedCurrentFile;
                 final String currentFileError = reloadError;
                 MAIN_HANDLER.post(() -> {
-                    if (!dialog.isShowing() || fragment.getContext() == null) {
+                    if (!dialog.isShowing() || getContext() == null) {
                         return;
                     }
                     progress.setVisibility(View.GONE);
@@ -789,7 +881,7 @@ public final class AiAssistantModule {
                             + report.getLocalDeletedCount() + " local deletions.");
                     updateSyncHeader(repositoryLine, lastSyncLine);
                     appendSyncLog(log, logScroll, "Sync completed.");
-                    if (currentFileContent != null) {
+                    if (currentFileContent != null && editText != null) {
                         editText.getText().replace(0, editText.getText().length(),
                                 currentFileContent);
                         onAfterApply.run();
@@ -950,7 +1042,7 @@ public final class AiAssistantModule {
         final EditText localRoot = new EditText(context);
         localRoot.setSingleLine(true);
         localRoot.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        localRoot.setHint("Empty uses the currently open note's folder");
+        localRoot.setHint("Empty uses Markor's main Notebook root");
         styleInput(localRoot, context);
         localRoot.setText(settingsStore.getGitHubLocalRoot());
         addSettingsLabel(context, body, "Local Notes Folder (Optional)");
@@ -1565,8 +1657,13 @@ public final class AiAssistantModule {
             final GeminiMarkdownHelper.IntentResult result, final String updatedMarkdown,
             final FolderSearchHelper.SearchResult folderResults, final String instruction,
             final String provider, final String model) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
+            return;
+        }
+        if (currentFile == null && ("edit".equals(result.getMode())
+                || "navigate".equals(result.getMode()))) {
+            showError("Open a note to use Edit or Jump.");
             return;
         }
         if ("edit".equals(result.getMode())) {
@@ -1584,7 +1681,7 @@ public final class AiAssistantModule {
                 return;
             }
             scrollCallback.scrollTo(result.getTargetText(), found -> {
-                final android.content.Context currentContext = fragment.getContext();
+                final android.content.Context currentContext = getContext();
                 if (currentContext != null) {
                     Toast.makeText(currentContext, found
                                     ? "Jumped to section: " + result.getReason()
@@ -1606,7 +1703,7 @@ public final class AiAssistantModule {
         try {
             voiceLauncher.launch(intent);
         } catch (ActivityNotFoundException exception) {
-            final android.content.Context context = fragment.getContext();
+            final android.content.Context context = getContext();
             if (context != null) {
                 Toast.makeText(context, "No speech recognition app is available.",
                         Toast.LENGTH_LONG).show();
@@ -1638,19 +1735,19 @@ public final class AiAssistantModule {
     private void onImageSelected(final android.net.Uri uri) {
         final ImageResultCallback callback = pendingImageCallback;
         pendingImageCallback = null;
-        if (uri == null || callback == null || fragment.getContext() == null) {
+        if (uri == null || callback == null || getContext() == null) {
             return;
         }
         try {
             callback.onSelected(ImageEncodingHelper.encodeJpeg(
-                    fragment.requireContext().getContentResolver(), uri));
+                    getContext().getContentResolver(), uri));
         } catch (IOException exception) {
             showError(exception.getMessage());
         }
     }
 
     private void showTutorChat(final EditText editText, final String markdown, final String imageBase64) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null || currentFile == null) {
             return;
         }
@@ -1682,7 +1779,7 @@ public final class AiAssistantModule {
     }
 
     private void showMnemonicsDialog(final EditText editText, final String markdown) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null || currentFile == null) {
             return;
         }
@@ -1741,6 +1838,29 @@ public final class AiAssistantModule {
                 });
     }
 
+    private void showMnemonicsVault(final android.content.Context context) {
+        AiMnemonicsDialog.showVault(context, mnemonicsStore,
+                new AiMnemonicsDialog.Actions() {
+                    @Override
+                    public void addToNote(final MarkdownSectionParser.Section section,
+                            final String title, final String breakdown,
+                            final AiMnemonicsStore store) {
+                        showError("Open a note to add a mnemonic.");
+                    }
+
+                    @Override
+                    public void jumpToHeading(final String headingTitle) {
+                        Toast.makeText(context, "Open the note first, then use Jump.",
+                                Toast.LENGTH_SHORT).show();
+                    }
+
+                    @Override
+                    public void showError(final String message) {
+                        AiAssistantModule.this.showError(message);
+                    }
+                });
+    }
+
     private void selectTeacherSource(final EditText editText, final String markdown) {
         final int rawSelectionStart = editText.getSelectionStart();
         final int rawSelectionEnd = editText.getSelectionEnd();
@@ -1760,7 +1880,7 @@ public final class AiAssistantModule {
             return;
         }
 
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
@@ -1824,7 +1944,7 @@ public final class AiAssistantModule {
 
     private void startVoiceTeacher(final EditText editText, final String section,
             final String heading, final AiVoiceTeacherHelper.TeacherStyle style) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null || section == null || section.trim().isEmpty()) {
             return;
         }
@@ -1852,7 +1972,7 @@ public final class AiAssistantModule {
                     throw new IOException("The AI provider returned an empty spoken lesson.");
                 }
                 MAIN_HANDLER.post(() -> {
-                    if (!loadingDialog.isShowing() || fragment.getContext() == null) {
+                    if (!loadingDialog.isShowing() || getContext() == null) {
                         return;
                     }
                     loadingDialog.dismiss();
@@ -1860,7 +1980,7 @@ public final class AiAssistantModule {
                 });
             } catch (IOException exception) {
                 MAIN_HANDLER.post(() -> {
-                    if (!loadingDialog.isShowing() || fragment.getContext() == null) {
+                    if (!loadingDialog.isShowing() || getContext() == null) {
                         return;
                     }
                     loadingDialog.dismiss();
@@ -1873,7 +1993,7 @@ public final class AiAssistantModule {
     private void showVoiceTeacherPlayer(final EditText editText, final String section,
             final String heading, final String lesson,
             final AiVoiceTeacherHelper.TeacherStyle style) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
@@ -2024,7 +2144,7 @@ public final class AiAssistantModule {
     }
 
     private void showSettingsDialog() {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
@@ -2273,7 +2393,7 @@ public final class AiAssistantModule {
             settingsImportLauncher.launch(mimeType);
         } catch (IllegalStateException exception) {
             pendingSettingsImportCallback = null;
-            showSettingsBackupError(fragment.getContext(),
+            showSettingsBackupError(getContext(),
                     "Could not open the file picker: " + exception.getMessage());
         }
     }
@@ -2281,7 +2401,7 @@ public final class AiAssistantModule {
     private void onSettingsImportPicked(final Uri uri) {
         final SettingsImportCallback callback = pendingSettingsImportCallback;
         pendingSettingsImportCallback = null;
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (uri == null || callback == null || context == null) {
             return;
         }
@@ -2470,7 +2590,7 @@ public final class AiAssistantModule {
                         ? GeminiMarkdownHelper.fetchAvailableModels(apiKey)
                         : OpenAiCompatibleHelper.fetchAvailableModels(provider.getDisplayName(), baseUrl, apiKey);
                 MAIN_HANDLER.post(() -> {
-                    if (!settingsDialog.isShowing() || fragment.getContext() == null) {
+                    if (!settingsDialog.isShowing() || getContext() == null) {
                         return;
                     }
                     form.progress.setVisibility(View.GONE);
@@ -2484,7 +2604,7 @@ public final class AiAssistantModule {
                 });
             } catch (IOException exception) {
                 MAIN_HANDLER.post(() -> {
-                    if (!settingsDialog.isShowing() || fragment.getContext() == null) {
+                    if (!settingsDialog.isShowing() || getContext() == null) {
                         return;
                     }
                     form.progress.setVisibility(View.GONE);
@@ -2585,7 +2705,7 @@ public final class AiAssistantModule {
     private void showAnswerDialog(final EditText editText, final String originalMarkdown,
             final String answer, final String matchedFile, final String instruction,
             final String provider, final String model) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
@@ -2608,6 +2728,10 @@ public final class AiAssistantModule {
         final Button copyButton = AiUiTheme.button(context, "Copy", AiUiTheme.ButtonKind.SECONDARY);
         final Button appendButton = AiUiTheme.button(
                 context, "Append to Note", AiUiTheme.ButtonKind.PRIMARY);
+        if (currentFile == null) {
+            appendButton.setEnabled(false);
+            appendButton.setText("Append (open a note)");
+        }
         final Button closeButton = AiUiTheme.button(context, "Close", AiUiTheme.ButtonKind.SECONDARY);
         firstRow.addView(copyButton, AiUiTheme.weightedButtonParams(context));
         firstRow.addView(appendButton, AiUiTheme.weightedButtonParams(context));
@@ -2654,12 +2778,13 @@ public final class AiAssistantModule {
     }
 
     private File findMatchedFile(final String matchedFile) {
-        if (matchedFile == null || matchedFile.trim().isEmpty() || currentFile == null
-                || currentFile.getParentFile() == null) {
+        final File searchRoot = currentFile == null
+                ? getNotebookRoot() : currentFile.getParentFile();
+        if (matchedFile == null || matchedFile.trim().isEmpty() || searchRoot == null) {
             return null;
         }
         try {
-            final File parent = currentFile.getParentFile().getCanonicalFile();
+            final File parent = searchRoot.getCanonicalFile();
             final File candidate = new File(parent, matchedFile).getCanonicalFile();
             final String parentPath = parent.getPath() + File.separator;
             return candidate.getPath().startsWith(parentPath) && candidate.isFile() ? candidate : null;
@@ -2669,7 +2794,7 @@ public final class AiAssistantModule {
     }
 
     private void showNewNotePreview(final String requestedFilename, final String noteContent) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
@@ -2713,7 +2838,7 @@ public final class AiAssistantModule {
     }
 
     private File createNote(final String requestedFilename, final String content) throws IOException {
-        final File parent = currentFile == null ? null : currentFile.getParentFile();
+        final File parent = currentFile == null ? getNotebookRoot() : currentFile.getParentFile();
         if (parent == null || !parent.isDirectory()) {
             throw new IOException("The current note's folder is not available.");
         }
@@ -2747,7 +2872,7 @@ public final class AiAssistantModule {
     private void showDiffPreview(final EditText editText, final String original, final String updated,
             final String instruction, final String provider, final String model,
             final Runnable onApplied) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
@@ -2832,7 +2957,7 @@ public final class AiAssistantModule {
     }
 
     private void showError(final String message) {
-        final android.content.Context context = fragment.getContext();
+        final android.content.Context context = getContext();
         if (context == null) {
             return;
         }

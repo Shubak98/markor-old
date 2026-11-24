@@ -645,6 +645,12 @@ public final class AiSettingsStore {
         return trim(preferences.getString(KEY_GITHUB_LOCAL_ROOT, ""));
     }
 
+    public void saveGitHubLocalRootIfEmpty(final String localRoot) {
+        if (getGitHubLocalRoot().isEmpty() && !trim(localRoot).isEmpty()) {
+            preferences.edit().putString(KEY_GITHUB_LOCAL_ROOT, trim(localRoot)).apply();
+        }
+    }
+
     public long getGitHubLastSyncMs() {
         return preferences.getLong(KEY_GITHUB_LAST_SYNC_MS, 0L);
     }
