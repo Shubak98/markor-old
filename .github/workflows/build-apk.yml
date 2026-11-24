@@ -27,9 +27,13 @@ jobs:
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
-          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
-            mkdir -p "$HOME/.android" && echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          if [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo "::error::DEBUG_KEYSTORE_B64 secret is empty or missing."
+            exit 1
           fi
+          printf '%s' "$DEBUG_KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > /tmp/fixed-debug.keystore
+          mkdir -p "$HOME/.android"
+          cp /tmp/fixed-debug.keystore "$HOME/.android/debug.keystore"
 
       - name: Build debug APK
         run: |
@@ -44,6 +48,23 @@ jobs:
             exit 1
           fi
           cp "$apk_path" markor-ai-latest.apk
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$sdk_root" ]; then
+            echo "::error::Neither ANDROID_HOME nor ANDROID_SDK_ROOT is set."
+            exit 1
+          fi
+          apksigner=$(find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner -print | sort -V | tail -n 1)
+          if [ -z "$apksigner" ]; then
+            echo "::error::Could not find apksigner under $sdk_root/build-tools."
+            exit 1
+          fi
+          "$apksigner" sign \
+            --ks /tmp/fixed-debug.keystore \
+            --ks-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --key-pass pass:android \
+            markor-ai-latest.apk
+          "$apksigner" verify --print-certs markor-ai-latest.apk
           {
             echo "**Build Time (IST):** $(TZ='Asia/Kolkata' date '+%d %b %Y, %I:%M %p IST')"
             echo
@@ -60,7 +81,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: markor-ai-debug-apk
-          path: app/build/outputs/apk/**/*.apk
+          path: markor-ai-latest.apk
 
       - name: Publish latest APK release
         uses: softprops/action-gh-release@v2
