@@ -8,10 +8,14 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -32,8 +36,39 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:assembleFlavorDefaultDebug
 
+      - name: Prepare release APK and notes
+        run: |
+          apk_path=$(find app/build/outputs/apk -type f -name '*.apk' -print -quit)
+          if [ -z "$apk_path" ]; then
+            echo "No built APK was found."
+            exit 1
+          fi
+          cp "$apk_path" markor-ai-latest.apk
+          {
+            echo "**Build Time (IST):** $(TZ='Asia/Kolkata' date '+%d %b %Y, %I:%M %p IST')"
+            echo
+            echo "**Latest Commit:** $(git log -1 --pretty=format:'%h %s')"
+            echo
+            echo "**Recent Changes (Last 5 Commits):**"
+            git log -n 5 --pretty=format:"- %s (%h)"
+            echo
+            echo
+            echo "**Install Note:** Direct download \`markor-ai-latest.apk\` and tap Update (signed with fixed debug keystore)."
+          } > release_notes.md
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: markor-ai-debug-apk
           path: app/build/outputs/apk/**/*.apk
+
+      - name: Publish latest APK release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: latest
+          name: Markor AI Latest Build
+          body_path: release_notes.md
+          files: markor-ai-latest.apk
+          make_latest: true
+          prerelease: false
