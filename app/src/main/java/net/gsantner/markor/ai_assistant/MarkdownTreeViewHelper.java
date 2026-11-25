@@ -94,7 +94,7 @@ public final class MarkdownTreeViewHelper {
 
             if (level == 1) {
                 final View accent = new View(context);
-                accent.setBackgroundColor(Color.parseColor("#E53935"));
+                accent.setBackgroundColor(AiUiTheme.ACCENT);
                 row.addView(accent, new LinearLayout.LayoutParams(
                         dp(context, 3), dp(context, 36)));
             } else if (level == 2) {

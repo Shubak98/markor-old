@@ -88,6 +88,12 @@ public final class MarkdownSectionParser {
         return Collections.unmodifiableList(sections);
     }
 
+    public static Section wholeNote(final String markdown) {
+        final String content = markdown == null ? "" : markdown;
+        return new Section(-1, "Whole Note", 1, "", 0, content.length(),
+                content, content, -1, false);
+    }
+
     private static final class HeadingStart {
         private final int start;
         private final int contentStart;

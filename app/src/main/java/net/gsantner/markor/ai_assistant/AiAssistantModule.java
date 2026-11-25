@@ -60,7 +60,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class AiAssistantModule {
-    private static final int MAX_WHOLE_NOTE_TEACHER_CHARS = 8_000;
     private static final long MAX_SETTINGS_BACKUP_BYTES = 1L * 1024L * 1024L;
 
     public interface ScrollResultCallback {
@@ -231,6 +230,7 @@ public final class AiAssistantModule {
         }
         final LinearLayout content = verticalLayout(context);
         final String[] selectedMode = {"auto"};
+        final MarkdownSectionParser.Section[] selectedSection = {null};
         addModeChips(context, content, selectedMode, currentFile != null);
         if (currentFile == null) {
             final TextView availability = AiUiTheme.label(context,
@@ -251,6 +251,22 @@ public final class AiAssistantModule {
         imageChip.setOnClickListener(view -> {
             attachedImage[0] = null;
             imageChip.setVisibility(View.GONE);
+        });
+        final TextView scopeChip = AiUiTheme.label(context, "", 12);
+        scopeChip.setSingleLine(true);
+        scopeChip.setMaxLines(1);
+        scopeChip.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        scopeChip.setMaxWidth(dp(context, 280));
+        scopeChip.setTextColor(AiUiTheme.ACCENT);
+        scopeChip.setPadding(dp(context, 9), dp(context, 6), dp(context, 9), dp(context, 6));
+        scopeChip.setBackground(AiUiTheme.rounded(AiUiTheme.SURFACE,
+                dp(context, 16), AiUiTheme.ACCENT, dp(context, 1)));
+        scopeChip.setVisibility(View.GONE);
+        content.addView(scopeChip, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scopeChip.setOnClickListener(view -> {
+            selectedSection[0] = null;
+            scopeChip.setVisibility(View.GONE);
         });
         addVerticalGap(context, content, 10);
 
@@ -273,6 +289,15 @@ public final class AiAssistantModule {
         inputActions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         final Button voiceButton = AiUiTheme.button(context, "Mic", AiUiTheme.ButtonKind.MIC);
         final Button imageButton = AiUiTheme.button(context, "📷 Image", AiUiTheme.ButtonKind.MIC);
+        final Button sectionButton = AiUiTheme.button(context, "📑 Section", AiUiTheme.ButtonKind.MIC);
+        for (Button utilityButton : new Button[]{voiceButton, imageButton, sectionButton}) {
+            utilityButton.setTextSize(12);
+            utilityButton.setMinWidth(0);
+            utilityButton.setMinHeight(dp(context, 36));
+            utilityButton.setSingleLine(true);
+            utilityButton.setMaxLines(1);
+            utilityButton.setPadding(dp(context, 9), dp(context, 6), dp(context, 9), dp(context, 6));
+        }
         final LinearLayout.LayoutParams inputActionParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         inputActionParams.setMargins(dp(context, 4), dp(context, 6), dp(context, 4), 0);
@@ -281,6 +306,10 @@ public final class AiAssistantModule {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         imageActionParams.setMargins(dp(context, 4), dp(context, 6), dp(context, 4), 0);
         inputActions.addView(imageButton, imageActionParams);
+        final LinearLayout.LayoutParams sectionActionParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sectionActionParams.setMargins(dp(context, 4), dp(context, 6), dp(context, 4), 0);
+        inputActions.addView(sectionButton, sectionActionParams);
         content.addView(inputActions, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         final LinearLayout statusRow = new LinearLayout(context);
@@ -340,6 +369,18 @@ public final class AiAssistantModule {
             attachedImage[0] = base64;
             imageChip.setVisibility(View.VISIBLE);
         }));
+        sectionButton.setOnClickListener(view -> {
+            if (currentFile == null) {
+                Toast.makeText(context, "Open a Markdown note to choose a section.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            showScopePicker(context, editText.getText().toString(), section -> {
+                selectedSection[0] = section;
+                scopeChip.setText("📑 Section: " + section.getTitle() + "  ✕");
+                scopeChip.setVisibility(View.VISIBLE);
+            });
+        });
         settingsButton.setOnClickListener(view -> showSettingsDialog());
         vaultButton.setOnClickListener(view -> showMnemonicsVault(context));
         allDiffsButton.setOnClickListener(view -> showAllDiffsDialog(context, editText, allDiffsButton));
@@ -363,19 +404,22 @@ public final class AiAssistantModule {
                 return;
             }
             final String originalMarkdown = editText.getText().toString();
+            final MarkdownSectionParser.Section scopedSection = selectedSection[0];
+            final String sourceMarkdown = scopedSection == null
+                    ? originalMarkdown : scopedSection.getContent();
             if ("teacher".equals(requestedMode)) {
                 dialog.dismiss();
-                selectTeacherSource(editText, originalMarkdown);
+                selectTeacherSource(editText, originalMarkdown, scopedSection);
                 return;
             }
             if ("mnemonics".equals(requestedMode)) {
                 dialog.dismiss();
-                showMnemonicsDialog(editText, originalMarkdown);
+                showMnemonicsDialog(editText, originalMarkdown, scopedSection);
                 return;
             }
             if ("tutor".equals(requestedMode)) {
                 dialog.dismiss();
-                showTutorChat(editText, originalMarkdown, attachedImage[0]);
+                showTutorChat(editText, sourceMarkdown, attachedImage[0], scopedSection);
                 return;
             }
             runButton.setEnabled(false);
@@ -396,7 +440,7 @@ public final class AiAssistantModule {
                 try {
                     if ("quiz".equals(requestedMode)) {
                         final String rawQuiz = new AiProviderRouter(settingsStore).generateStudyAnswer(
-                                originalMarkdown, "Create 5 to 10 multiple-choice questions from the note. "
+                                sourceMarkdown, "Create 5 to 10 multiple-choice questions from the note. "
                                         + "Return strict JSON only: {\"questions\":[{\"question\":\"...\","
                                         + "\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctIndex\":0,"
                                         + "\"explanation\":\"...\"}]}. User request: " + instruction,
@@ -407,14 +451,15 @@ public final class AiAssistantModule {
                             if (getContext() != null) {
                                 AiStudyDialogs.showQuiz(context, questions,
                                         text -> appendToNotePreview(editText, originalMarkdown, text,
-                                                instruction, "quiz", ""));
+                                                instruction, "quiz", "", scopedSection),
+                                        createOutputRefineRequest(), createOutputRefineMicCallback());
                             }
                         });
                         return;
                     }
                     if ("anki".equals(requestedMode)) {
                         final String rawCards = new AiProviderRouter(settingsStore).generateStudyAnswer(
-                                originalMarkdown, "Create useful Anki flashcards from this note. Return "
+                                sourceMarkdown, "Create useful Anki flashcards from this note. Return "
                                         + "strict JSON only: {\"cards\":[{\"front\":\"...\",\"back\":\"...\"}]}. "
                                         + "User request: " + instruction, attachedImage[0]);
                         final List<AnkiCsvHelper.Card> cards = AnkiCsvHelper.parseCards(rawCards);
@@ -429,7 +474,7 @@ public final class AiAssistantModule {
                     }
                     if ("diagram".equals(requestedMode)) {
                         final String diagram = new AiProviderRouter(settingsStore).generateStudyAnswer(
-                                originalMarkdown, "Create one valid Mermaid flowchart or mindmap that "
+                                sourceMarkdown, "Create one valid Mermaid flowchart or mindmap that "
                                         + "summarizes the note. Use simple alphanumeric node IDs and safe "
                                         + "labels without quotes, brackets, parentheses, or unescaped "
                                         + "special characters. Return only a ```mermaid fenced block. "
@@ -439,7 +484,8 @@ public final class AiAssistantModule {
                             dialog.dismiss();
                             if (getContext() != null) {
                                 appendToNotePreview(editText, originalMarkdown,
-                                        "\n\n" + markdownDiagram, instruction, "diagram", "");
+                                        "\n\n" + markdownDiagram, instruction, "diagram", "",
+                                        scopedSection);
                             }
                         });
                         return;
@@ -461,16 +507,20 @@ public final class AiAssistantModule {
                                     + instruction : instruction;
                     final String effectiveMode = hasImage ? "study" : requestedMode;
                     final AiProviderRouter.Result providerResult = new AiProviderRouter(settingsStore)
-                            .generateIntent(originalMarkdown, effectiveInstruction, effectiveMode,
+                            .generateIntent(sourceMarkdown, effectiveInstruction, effectiveMode,
                                     folderContext, attachedImage[0]);
                     final GeminiMarkdownHelper.IntentResult result = providerResult.getIntentResult();
                     final String expectedMode = expectedIntentMode(effectiveMode);
                     if (expectedMode != null && !expectedMode.equals(result.getMode())) {
                         throw new IOException("The AI provider did not follow the selected mode. Please try again.");
                     }
-                    final String updatedMarkdown = "edit".equals(result.getMode())
-                            ? GeminiMarkdownHelper.applyEdits(originalMarkdown, result.getEditsJson())
+                    final String updatedSection = "edit".equals(result.getMode())
+                            ? GeminiMarkdownHelper.applyEdits(sourceMarkdown, result.getEditsJson())
                             : null;
+                    final String updatedMarkdown = updatedSection == null ? null
+                            : scopedSection == null ? updatedSection
+                            : MarkdownSectionReplacement.replace(originalMarkdown,
+                                    scopedSection, updatedSection);
                     MAIN_HANDLER.post(() -> {
                         dialog.dismiss();
                         if (getContext() != null) {
@@ -480,10 +530,10 @@ public final class AiAssistantModule {
                             }
                             handleIntentResult(editText, originalMarkdown, result, updatedMarkdown,
                                     folderResults, effectiveInstruction, providerResult.getUsedProviderId(),
-                                    providerResult.getUsedModelName());
+                                    providerResult.getUsedModelName(), scopedSection, updatedSection);
                         }
                     });
-                } catch (IOException exception) {
+                } catch (IOException | IllegalArgumentException exception) {
                     MAIN_HANDLER.post(() -> {
                         if (!dialog.isShowing() || getContext() == null) {
                             return;
@@ -1656,7 +1706,8 @@ public final class AiAssistantModule {
     private void handleIntentResult(final EditText editText, final String originalMarkdown,
             final GeminiMarkdownHelper.IntentResult result, final String updatedMarkdown,
             final FolderSearchHelper.SearchResult folderResults, final String instruction,
-            final String provider, final String model) {
+            final String provider, final String model,
+            final MarkdownSectionParser.Section scopedSection, final String updatedSection) {
         final android.content.Context context = getContext();
         if (context == null) {
             return;
@@ -1667,13 +1718,14 @@ public final class AiAssistantModule {
             return;
         }
         if ("edit".equals(result.getMode())) {
-            showDiffPreview(editText, originalMarkdown, updatedMarkdown, instruction, provider, model);
+            showDiffPreview(editText, originalMarkdown, updatedMarkdown, instruction, provider, model,
+                    null, scopedSection, updatedSection);
         } else if ("answer".equals(result.getMode())) {
             final String matchedFile = result.getMatchedFile() != null
                     ? result.getMatchedFile()
                     : folderResults == null ? null : folderResults.getBestMatch();
             showAnswerDialog(editText, originalMarkdown, result.getAnswer(), matchedFile,
-                    instruction, provider, model);
+                    instruction, provider, model, scopedSection);
         } else if ("navigate".equals(result.getMode())) {
             if (scrollCallback == null) {
                 Toast.makeText(context, "Could not jump to the requested section.",
@@ -1694,6 +1746,29 @@ public final class AiAssistantModule {
         } else {
             showError("The AI provider returned an unsupported intent.");
         }
+    }
+
+    private void showScopePicker(final android.content.Context context, final String markdown,
+            final MarkdownTreeViewHelper.SectionSelectionListener listener) {
+        final List<MarkdownSectionParser.Section> sections = MarkdownSectionParser.parse(markdown);
+        final LinearLayout body = verticalLayout(context);
+        final Dialog[] picker = new Dialog[1];
+        if (sections.isEmpty()) {
+            final TextView empty = AiUiTheme.label(context,
+                    "This Markdown note has no headings to scope.", 14);
+            empty.setTextColor(AiUiTheme.SECONDARY_TEXT);
+            body.addView(empty);
+        } else {
+            body.addView(MarkdownTreeViewHelper.create(context, sections, section -> {
+                picker[0].dismiss();
+                listener.onSelected(section);
+            }));
+        }
+        final LinearLayout actions = AiUiTheme.actionRow(context);
+        final Button cancel = AiUiTheme.button(context, "Cancel", AiUiTheme.ButtonKind.SECONDARY);
+        actions.addView(cancel, AiUiTheme.weightedButtonParams(context));
+        picker[0] = AiUiTheme.showDialog(context, "Choose Section Scope", body, actions, null);
+        cancel.setOnClickListener(view -> picker[0].dismiss());
     }
 
     private void startVoiceInput() {
@@ -1746,12 +1821,16 @@ public final class AiAssistantModule {
         }
     }
 
-    private void showTutorChat(final EditText editText, final String markdown, final String imageBase64) {
+    private void showTutorChat(final EditText editText, final String markdown,
+            final String imageBase64, final MarkdownSectionParser.Section scopedSection) {
         final android.content.Context context = getContext();
         if (context == null || currentFile == null) {
             return;
         }
-        AiStudyDialogs.showTutorChat(context, currentFile.getAbsolutePath(), markdown,
+        final String chatKey = currentFile.getAbsolutePath()
+                + (scopedSection == null ? "" : "#" + scopedSection.getStartOffset()
+                        + ":" + scopedSection.getEndOffset());
+        AiStudyDialogs.showTutorChat(context, chatKey, markdown,
                 (recentTurns, question, image, callback) -> EXECUTOR.execute(() -> {
                     try {
                         final StringBuilder history = new StringBuilder();
@@ -1771,19 +1850,20 @@ public final class AiAssistantModule {
                         MAIN_HANDLER.post(() -> callback.onResult(null, exception.getMessage()));
                     }
                 }), text -> appendToNotePreview(editText, editText.getText().toString(),
-                        "\n\n" + text, "Append tutor response", "tutor", ""),
+                        "\n\n" + text, "Append tutor response", "tutor", "", scopedSection),
                 input -> {
                     activeInstructionInput = input;
                     startVoiceInput();
-                }, imageBase64);
+                }, imageBase64, createOutputRefineRequest());
     }
 
-    private void showMnemonicsDialog(final EditText editText, final String markdown) {
+    private void showMnemonicsDialog(final EditText editText, final String markdown,
+            final MarkdownSectionParser.Section selectedSection) {
         final android.content.Context context = getContext();
         if (context == null || currentFile == null) {
             return;
         }
-        AiMnemonicsDialog.show(context, markdown, currentFile, mnemonicsStore, section ->
+        AiMnemonicsDialog.show(context, markdown, currentFile, mnemonicsStore, selectedSection, section ->
                 new AiProviderRouter(settingsStore).generateRawCompletion(
                         section.getContent(),
                         "You are creating a UPSC Civil Services (UPSC) study mnemonic from exactly "
@@ -1798,7 +1878,7 @@ public final class AiAssistantModule {
                     public void addToNote(final MarkdownSectionParser.Section section,
                             final String title, final String breakdown,
                             final AiMnemonicsStore store) {
-                        final int insertAt = Math.min(section.getEndOffset(), markdown.length());
+                        final int insertAt = section.getEndOffset();
                         final StringBuilder block = new StringBuilder();
                         if (insertAt > 0 && insertAt <= markdown.length()
                                 && markdown.charAt(insertAt - 1) != '\n') {
@@ -1808,8 +1888,14 @@ public final class AiAssistantModule {
                         for (String line : breakdown.split("\\r?\\n")) {
                             block.append("> ").append(line.trim()).append('\n');
                         }
-                        final String updated = markdown.substring(0, insertAt)
-                                + block + markdown.substring(insertAt);
+                        final String updated;
+                        try {
+                            updated = MarkdownSectionReplacement.replace(markdown, section,
+                                    section.getContent() + block);
+                        } catch (IllegalArgumentException exception) {
+                            showError(exception.getMessage());
+                            return;
+                        }
                         showDiffPreview(editText, markdown, updated,
                                 "Add mnemonic for " + section.getTitle(),
                                 "mnemonics", "", () -> {
@@ -1821,7 +1907,7 @@ public final class AiAssistantModule {
                                         showError("Mnemonic was applied, but could not be saved: "
                                                 + exception.getMessage());
                                     }
-                                });
+                                }, section, section.getContent() + block);
                     }
 
                     @Override
@@ -1835,7 +1921,7 @@ public final class AiAssistantModule {
                     public void showError(final String message) {
                         AiAssistantModule.this.showError(message);
                     }
-                });
+                }, createOutputRefineRequest(), createOutputRefineMicCallback());
     }
 
     private void showMnemonicsVault(final android.content.Context context) {
@@ -1861,7 +1947,13 @@ public final class AiAssistantModule {
                 });
     }
 
-    private void selectTeacherSource(final EditText editText, final String markdown) {
+    private void selectTeacherSource(final EditText editText, final String markdown,
+            final MarkdownSectionParser.Section selectedSection) {
+        if (selectedSection != null) {
+            startVoiceTeacher(editText, selectedSection.getContent(), selectedSection.getTitle(),
+                    settingsStore.getTeacherStyle(), selectedSection);
+            return;
+        }
         final int rawSelectionStart = editText.getSelectionStart();
         final int rawSelectionEnd = editText.getSelectionEnd();
         final int selectionStart = Math.min(rawSelectionStart, rawSelectionEnd);
@@ -1876,7 +1968,7 @@ public final class AiAssistantModule {
                     heading = section.getTitle();
                 }
             }
-            startVoiceTeacher(editText, selectedText, heading, settingsStore.getTeacherStyle());
+            startVoiceTeacher(editText, selectedText, heading, settingsStore.getTeacherStyle(), null);
             return;
         }
 
@@ -1900,11 +1992,11 @@ public final class AiAssistantModule {
         if (!sections.isEmpty()) {
             body.addView(MarkdownTreeViewHelper.create(context, sections, section -> {
                 picker[0].dismiss();
-                startVoiceTeacher(editText, section.getContent(), section.getTitle(), selectedStyle[0]);
+                startVoiceTeacher(editText, section.getContent(), section.getTitle(),
+                        selectedStyle[0], section);
             }));
         }
-        if (!markdown.trim().isEmpty()
-                && (markdown.length() <= MAX_WHOLE_NOTE_TEACHER_CHARS || sections.isEmpty())) {
+        if (!markdown.trim().isEmpty()) {
             addTeacherSectionOption(context, body, "Whole Note", markdown, "", picker, editText,
                     selectedStyle);
         }
@@ -1938,12 +2030,14 @@ public final class AiAssistantModule {
         body.addView(option, params);
         option.setOnClickListener(view -> {
             picker[0].dismiss();
-            startVoiceTeacher(editText, content, heading, selectedStyle[0]);
+            startVoiceTeacher(editText, content, heading, selectedStyle[0],
+                    "Whole Note".equals(label) ? MarkdownSectionParser.wholeNote(content) : null);
         });
     }
 
     private void startVoiceTeacher(final EditText editText, final String section,
-            final String heading, final AiVoiceTeacherHelper.TeacherStyle style) {
+            final String heading, final AiVoiceTeacherHelper.TeacherStyle style,
+            final MarkdownSectionParser.Section noteScope) {
         final android.content.Context context = getContext();
         if (context == null || section == null || section.trim().isEmpty()) {
             return;
@@ -1976,7 +2070,7 @@ public final class AiAssistantModule {
                         return;
                     }
                     loadingDialog.dismiss();
-                    showVoiceTeacherPlayer(editText, section, heading, lesson, selectedStyle);
+                    showVoiceTeacherPlayer(editText, section, heading, lesson, selectedStyle, noteScope);
                 });
             } catch (IOException exception) {
                 MAIN_HANDLER.post(() -> {
@@ -1992,7 +2086,8 @@ public final class AiAssistantModule {
 
     private void showVoiceTeacherPlayer(final EditText editText, final String section,
             final String heading, final String lesson,
-            final AiVoiceTeacherHelper.TeacherStyle style) {
+            final AiVoiceTeacherHelper.TeacherStyle style,
+            final MarkdownSectionParser.Section noteScope) {
         final android.content.Context context = getContext();
         if (context == null) {
             return;
@@ -2033,24 +2128,59 @@ public final class AiAssistantModule {
                             : "AI Teacher Explanation: " + taughtHeading.replace('\n', ' ').trim();
                     appendToNotePreview(editText, editText.getText().toString(),
                             "\n\n## " + label + "\n\n" + explanation.trim() + "\n",
-                            "Save AI Teacher explanation", "teacher", "");
+                            "Save AI Teacher explanation", "teacher", "", noteScope);
                 },
                 input -> {
                     activeInstructionInput = input;
                     startVoiceInput();
-                });
+                }, createOutputRefineRequest());
     }
 
     private void appendToNotePreview(final EditText editText, final String original,
             final String content, final String instruction, final String provider, final String model) {
+        appendToNotePreview(editText, original, content, instruction, provider, model, null);
+    }
+
+    private void appendToNotePreview(final EditText editText, final String original,
+            final String content, final String instruction, final String provider, final String model,
+            final MarkdownSectionParser.Section scopedSection) {
         try {
-            final String patch = new JSONObject().put("edits", new JSONArray().put(new JSONObject()
-                    .put("action", "append_end").put("target", "").put("content", content))).toString();
-            final String updated = GeminiMarkdownHelper.applyEdits(original, patch);
-            showDiffPreview(editText, original, updated, instruction, provider, model);
-        } catch (org.json.JSONException | IOException exception) {
+            final String updated;
+            if (scopedSection == null) {
+                final String patch = new JSONObject().put("edits", new JSONArray().put(new JSONObject()
+                        .put("action", "append_end").put("target", "").put("content", content))).toString();
+                updated = GeminiMarkdownHelper.applyEdits(original, patch);
+            } else {
+                updated = MarkdownSectionReplacement.replace(original, scopedSection,
+                        scopedSection.getContent() + content);
+            }
+            showDiffPreview(editText, original, updated, instruction, provider, model,
+                    null, scopedSection, scopedSection == null ? null
+                            : scopedSection.getContent() + content);
+        } catch (org.json.JSONException | IOException | IllegalArgumentException exception) {
             showError(exception.getMessage());
         }
+    }
+
+    private AiOutputRefineHelper.RefineRequest createOutputRefineRequest() {
+        return (currentOutput, instruction, callback) -> EXECUTOR.execute(() -> {
+            try {
+                final String output = new AiProviderRouter(settingsStore).generateRawCompletion(
+                        "You are a precise editor. Follow the refinement instruction and preserve the "
+                                + "current output's format. Return only the revised output.",
+                        AiOutputRefineHelper.buildPrompt(currentOutput, instruction));
+                MAIN_HANDLER.post(() -> callback.onResult(output, null));
+            } catch (IOException exception) {
+                MAIN_HANDLER.post(() -> callback.onResult(null, exception.getMessage()));
+            }
+        });
+    }
+
+    private AiOutputRefineHelper.MicCallback createOutputRefineMicCallback() {
+        return input -> {
+            activeInstructionInput = input;
+            startVoiceInput();
+        };
     }
 
     private static String formatMermaid(final String response) throws IOException {
@@ -2071,8 +2201,66 @@ public final class AiAssistantModule {
 
     private void showAnkiPreview(final android.content.Context context,
             final List<AnkiCsvHelper.Card> cards, final String csv) {
+        final String[] currentCsv = {csv};
         final LinearLayout body = verticalLayout(context);
-        body.addView(AiUiTheme.label(context, cards.size() + " cards", 14));
+        final TextView count = AiUiTheme.label(context, cards.size() + " cards", 14);
+        body.addView(count);
+        final LinearLayout cardsPreview = verticalLayout(context);
+        body.addView(cardsPreview, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        renderAnkiCards(context, cardsPreview, cards);
+        final LinearLayout actions = new LinearLayout(context);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout refineRow = AiUiTheme.actionRow(context);
+        final Button refine = AiUiTheme.button(
+                context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
+        refineRow.addView(refine, AiUiTheme.weightedButtonParams(context));
+        actions.addView(refineRow);
+        final LinearLayout fileActions = AiUiTheme.actionRow(context);
+        final Button copy = AiUiTheme.button(context, "Copy CSV", AiUiTheme.ButtonKind.SECONDARY);
+        final Button save = AiUiTheme.button(context, "Save .csv", AiUiTheme.ButtonKind.PRIMARY);
+        fileActions.addView(copy, AiUiTheme.weightedButtonParams(context));
+        fileActions.addView(save, AiUiTheme.weightedButtonParams(context));
+        actions.addView(fileActions);
+        final Dialog dialog = AiUiTheme.showDialog(context, "Anki CSV Preview", body, actions, null);
+        refine.setOnClickListener(view -> AiOutputRefineHelper.show(context, currentCsv[0],
+                createOutputRefineRequest(), refined -> {
+                    try {
+                        final List<AnkiCsvHelper.Card> updatedCards = AnkiCsvHelper.parseCsv(refined);
+                        currentCsv[0] = AnkiCsvHelper.toCsv(updatedCards);
+                        count.setText(updatedCards.size() + " cards");
+                        renderAnkiCards(context, cardsPreview, updatedCards);
+                    } catch (IOException exception) {
+                        showError(exception.getMessage());
+                    }
+                }, input -> {
+                    activeInstructionInput = input;
+                    startVoiceInput();
+                }));
+        copy.setOnClickListener(view -> {
+            final android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
+                    context.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) {
+                showError("Could not access the clipboard.");
+                return;
+            }
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Anki CSV", currentCsv[0]));
+            Toast.makeText(context, "CSV copied.", Toast.LENGTH_SHORT).show();
+        });
+        save.setOnClickListener(view -> {
+            try {
+                final File file = saveAnkiCsv(currentCsv[0]);
+                dialog.dismiss();
+                Toast.makeText(context, "Saved " + file.getName(), Toast.LENGTH_SHORT).show();
+            } catch (IOException exception) {
+                showError(exception.getMessage());
+            }
+        });
+    }
+
+    private static void renderAnkiCards(final android.content.Context context,
+            final LinearLayout cardsPreview, final List<AnkiCsvHelper.Card> cards) {
+        cardsPreview.removeAllViews();
         for (int index = 0; index < Math.min(cards.size(), 5); index++) {
             final AnkiCsvHelper.Card card = cards.get(index);
             final LinearLayout item = verticalLayout(context);
@@ -2085,33 +2273,8 @@ public final class AiAssistantModule {
             final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             params.setMargins(0, dp(context, 8), 0, 0);
-            body.addView(item, params);
+            cardsPreview.addView(item, params);
         }
-        final LinearLayout actions = AiUiTheme.actionRow(context);
-        final Button copy = AiUiTheme.button(context, "Copy CSV", AiUiTheme.ButtonKind.SECONDARY);
-        final Button save = AiUiTheme.button(context, "Save .csv", AiUiTheme.ButtonKind.PRIMARY);
-        actions.addView(copy, AiUiTheme.weightedButtonParams(context));
-        actions.addView(save, AiUiTheme.weightedButtonParams(context));
-        final Dialog dialog = AiUiTheme.showDialog(context, "Anki CSV Preview", body, actions, null);
-        copy.setOnClickListener(view -> {
-            final android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
-                    context.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-            if (clipboard == null) {
-                showError("Could not access the clipboard.");
-                return;
-            }
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Anki CSV", csv));
-            Toast.makeText(context, "CSV copied.", Toast.LENGTH_SHORT).show();
-        });
-        save.setOnClickListener(view -> {
-            try {
-                final File file = saveAnkiCsv(csv);
-                dialog.dismiss();
-                Toast.makeText(context, "Saved " + file.getName(), Toast.LENGTH_SHORT).show();
-            } catch (IOException exception) {
-                showError(exception.getMessage());
-            }
-        });
     }
 
     private File saveAnkiCsv(final String csv) throws IOException {
@@ -2704,14 +2867,16 @@ public final class AiAssistantModule {
 
     private void showAnswerDialog(final EditText editText, final String originalMarkdown,
             final String answer, final String matchedFile, final String instruction,
-            final String provider, final String model) {
+            final String provider, final String model,
+            final MarkdownSectionParser.Section scopedSection) {
         final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
+        final String[] currentAnswer = {answer};
         final LinearLayout content = verticalLayout(context);
         final TextView answerText = new TextView(context);
-        answerText.setText(answer);
+        answerText.setText(currentAnswer[0]);
         answerText.setTextIsSelectable(true);
         answerText.setTextSize(16);
         answerText.setTextColor(AiUiTheme.PRIMARY_TEXT);
@@ -2725,6 +2890,7 @@ public final class AiAssistantModule {
         actions.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout firstRow = AiUiTheme.actionRow(context);
         final LinearLayout secondRow = AiUiTheme.actionRow(context);
+        final LinearLayout refineRow = AiUiTheme.actionRow(context);
         final Button copyButton = AiUiTheme.button(context, "Copy", AiUiTheme.ButtonKind.SECONDARY);
         final Button appendButton = AiUiTheme.button(
                 context, "Append to Note", AiUiTheme.ButtonKind.PRIMARY);
@@ -2741,31 +2907,40 @@ public final class AiAssistantModule {
         if (openButton != null) {
             secondRow.addView(openButton, AiUiTheme.weightedButtonParams(context));
         }
+        final Button refineButton = AiUiTheme.button(
+                context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
         secondRow.addView(closeButton, AiUiTheme.weightedButtonParams(context));
+        refineRow.addView(refineButton, AiUiTheme.weightedButtonParams(context));
         actions.addView(firstRow);
+        actions.addView(refineRow);
         actions.addView(secondRow);
         final Dialog dialog = AiUiTheme.showDialog(context, "AI Answer", content, actions, null);
         copyButton.setOnClickListener(view -> {
             final ClipboardManager clipboard = (ClipboardManager)
                     context.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
             if (clipboard != null) {
-                clipboard.setPrimaryClip(ClipData.newPlainText("AI Answer", answer));
+                clipboard.setPrimaryClip(ClipData.newPlainText("AI Answer", currentAnswer[0]));
                 Toast.makeText(context, "Answer copied.", Toast.LENGTH_SHORT).show();
             }
         });
         appendButton.setOnClickListener(view -> {
             try {
-                final String appendContent = "\n\n## AI Answer\n\n" + answer;
-                final String updated = GeminiMarkdownHelper.applyEdits(originalMarkdown,
-                        new JSONObject().put("edits", new JSONArray().put(new JSONObject()
-                                .put("action", "append_end").put("target", "").put("content", appendContent)))
-                                .toString());
+                final String appendContent = "\n\n## AI Answer\n\n" + currentAnswer[0];
                 dialog.dismiss();
-                showDiffPreview(editText, originalMarkdown, updated, instruction, provider, model);
-            } catch (org.json.JSONException | IOException exception) {
+                appendToNotePreview(editText, originalMarkdown, appendContent,
+                        instruction, provider, model, scopedSection);
+            } catch (IllegalArgumentException exception) {
                 showError(exception.getMessage());
             }
         });
+        refineButton.setOnClickListener(view -> AiOutputRefineHelper.show(context, currentAnswer[0],
+                createOutputRefineRequest(), refined -> {
+                    currentAnswer[0] = refined;
+                    answerText.setText(refined);
+                }, input -> {
+                    activeInstructionInput = input;
+                    startVoiceInput();
+                }));
         closeButton.setOnClickListener(view -> dialog.dismiss());
         if (openButton != null) {
             openButton.setOnClickListener(view -> {
@@ -2798,6 +2973,7 @@ public final class AiAssistantModule {
         if (context == null) {
             return;
         }
+        final String[] currentContent = {noteContent};
         final LinearLayout content = verticalLayout(context);
         final EditText filenameInput = new EditText(context);
         filenameInput.setSingleLine(true);
@@ -2805,7 +2981,7 @@ public final class AiAssistantModule {
         styleInput(filenameInput, context);
         filenameInput.setText(GeminiMarkdownHelper.sanitizeNoteFilename(requestedFilename));
         final TextView preview = new TextView(context);
-        preview.setText(noteContent);
+        preview.setText(currentContent[0]);
         preview.setTextIsSelectable(true);
         preview.setTypeface(Typeface.MONOSPACE);
         preview.setTextColor(AiUiTheme.PRIMARY_TEXT);
@@ -2817,16 +2993,32 @@ public final class AiAssistantModule {
         addVerticalGap(context, content, 12);
         content.addView(preview, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        final LinearLayout actions = AiUiTheme.actionRow(context);
+        final LinearLayout actions = new LinearLayout(context);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout editRow = AiUiTheme.actionRow(context);
+        final Button refineButton = AiUiTheme.button(
+                context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
+        editRow.addView(refineButton, AiUiTheme.weightedButtonParams(context));
+        actions.addView(editRow);
+        final LinearLayout actionRow = AiUiTheme.actionRow(context);
         final Button cancelButton = AiUiTheme.button(context, "Cancel", AiUiTheme.ButtonKind.SECONDARY);
         final Button createButton = AiUiTheme.button(context, "Create & Open", AiUiTheme.ButtonKind.PRIMARY);
-        actions.addView(cancelButton, AiUiTheme.weightedButtonParams(context));
-        actions.addView(createButton, AiUiTheme.weightedButtonParams(context));
+        actionRow.addView(cancelButton, AiUiTheme.weightedButtonParams(context));
+        actionRow.addView(createButton, AiUiTheme.weightedButtonParams(context));
+        actions.addView(actionRow);
         final Dialog dialog = AiUiTheme.showDialog(context, "Preview New Note", content, actions, null);
+        refineButton.setOnClickListener(view -> AiOutputRefineHelper.show(context, currentContent[0],
+                createOutputRefineRequest(), refined -> {
+                    currentContent[0] = refined;
+                    preview.setText(refined);
+                }, input -> {
+                    activeInstructionInput = input;
+                    startVoiceInput();
+                }));
         cancelButton.setOnClickListener(view -> dialog.dismiss());
         createButton.setOnClickListener(view -> {
             try {
-                final File created = createNote(filenameInput.getText().toString(), noteContent);
+                final File created = createNote(filenameInput.getText().toString(), currentContent[0]);
                 dialog.dismiss();
                 if (openFileCallback != null) {
                     openFileCallback.open(created);
@@ -2866,16 +3058,27 @@ public final class AiAssistantModule {
 
     private void showDiffPreview(final EditText editText, final String original, final String updated,
             final String instruction, final String provider, final String model) {
-        showDiffPreview(editText, original, updated, instruction, provider, model, null);
+        showDiffPreview(editText, original, updated, instruction, provider, model,
+                null, null, null);
     }
 
     private void showDiffPreview(final EditText editText, final String original, final String updated,
             final String instruction, final String provider, final String model,
             final Runnable onApplied) {
+        showDiffPreview(editText, original, updated, instruction, provider, model,
+                onApplied, null, null);
+    }
+
+    private void showDiffPreview(final EditText editText, final String original, final String updated,
+            final String instruction, final String provider, final String model,
+            final Runnable onApplied, final MarkdownSectionParser.Section scopedSection,
+            final String updatedSection) {
         final android.content.Context context = getContext();
         if (context == null) {
             return;
         }
+        final String[] currentUpdated = {updated};
+        final String[] currentSection = {updatedSection};
         final LinearLayout body = verticalLayout(context);
         final LinearLayout toggle = AiUiTheme.actionRow(context);
         final Button diffButton = AiUiTheme.button(context, "Diff View", AiUiTheme.ButtonKind.PRIMARY);
@@ -2884,7 +3087,7 @@ public final class AiAssistantModule {
         toggle.addView(fullButton, AiUiTheme.weightedButtonParams(context));
         body.addView(toggle);
         final List<SimpleLineDiff.Line> compactDiff =
-                SimpleLineDiff.buildCompactDiffLines(original, updated, 2);
+                SimpleLineDiff.buildCompactDiffLines(original, currentUpdated[0], 2);
         final int[] changeCounts = countDiffChanges(compactDiff);
         final LinearLayout summary = AiUiTheme.actionRow(context);
         summary.setPadding(dp(context, 10), dp(context, 6), dp(context, 10), dp(context, 6));
@@ -2915,14 +3118,47 @@ public final class AiAssistantModule {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         previewParams.setMargins(0, dp(context, 12), 0, 0);
         body.addView(preview, previewParams);
-        renderDiffPreview(context, preview, updated, false, compactDiff);
+        renderDiffPreview(context, preview, currentUpdated[0], false, compactDiff);
 
-        final LinearLayout actions = AiUiTheme.actionRow(context);
+        final LinearLayout actions = new LinearLayout(context);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout editRow = AiUiTheme.actionRow(context);
+        final Button refineButton = AiUiTheme.button(
+                context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
+        editRow.addView(refineButton, AiUiTheme.weightedButtonParams(context));
+        actions.addView(editRow);
+        final LinearLayout actionRow = AiUiTheme.actionRow(context);
         final Button cancelButton = AiUiTheme.button(context, "Cancel", AiUiTheme.ButtonKind.SECONDARY);
         final Button applyButton = AiUiTheme.button(context, "Apply Changes", AiUiTheme.ButtonKind.PRIMARY);
-        actions.addView(cancelButton, AiUiTheme.weightedButtonParams(context));
-        actions.addView(applyButton, AiUiTheme.weightedButtonParams(context));
+        actionRow.addView(cancelButton, AiUiTheme.weightedButtonParams(context));
+        actionRow.addView(applyButton, AiUiTheme.weightedButtonParams(context));
+        actions.addView(actionRow);
         final Dialog dialog = AiUiTheme.showDialog(context, "Diff Preview", body, actions, null);
+        refineButton.setOnClickListener(view -> AiOutputRefineHelper.show(context,
+                scopedSection == null ? currentUpdated[0] : currentSection[0],
+                createOutputRefineRequest(), refined -> {
+                    if (scopedSection == null) {
+                        currentUpdated[0] = refined;
+                    } else {
+                        try {
+                            currentUpdated[0] = MarkdownSectionReplacement.replace(
+                                    original, scopedSection, refined);
+                            currentSection[0] = refined;
+                        } catch (IllegalArgumentException exception) {
+                            showError(exception.getMessage());
+                            return;
+                        }
+                    }
+                    final List<SimpleLineDiff.Line> refreshedDiff =
+                            SimpleLineDiff.buildCompactDiffLines(original, currentUpdated[0], 2);
+                    final int[] refreshedCounts = countDiffChanges(refreshedDiff);
+                    addedSummary.setText("+" + refreshedCounts[0] + " added");
+                    removedSummary.setText("-" + refreshedCounts[1] + " removed");
+                    renderDiffPreview(context, preview, currentUpdated[0], false, refreshedDiff);
+                }, input -> {
+                    activeInstructionInput = input;
+                    startVoiceInput();
+                }));
         cancelButton.setOnClickListener(view -> dialog.dismiss());
         applyButton.setOnClickListener(view -> {
             final String beforeApplying = editText.getText().toString();
@@ -2932,12 +3168,12 @@ public final class AiAssistantModule {
             }
             try {
                 diffHistoryStore.addEntry(
-                        currentFile, instruction, provider, model, beforeApplying, updated);
+                        currentFile, instruction, provider, model, beforeApplying, currentUpdated[0]);
             } catch (IOException exception) {
                 showError("Could not save this edit to history: " + exception.getMessage());
                 return;
             }
-            editText.getText().replace(0, editText.getText().length(), updated);
+            editText.getText().replace(0, editText.getText().length(), currentUpdated[0]);
             dialog.dismiss();
             onAfterApply.run();
             if (onApplied != null) {
@@ -2947,12 +3183,16 @@ public final class AiAssistantModule {
         diffButton.setOnClickListener(view -> {
             AiUiTheme.styleButton(diffButton, AiUiTheme.ButtonKind.PRIMARY);
             AiUiTheme.styleButton(fullButton, AiUiTheme.ButtonKind.SECONDARY);
-            renderDiffPreview(context, preview, updated, false, compactDiff);
+            final List<SimpleLineDiff.Line> refreshedDiff =
+                    SimpleLineDiff.buildCompactDiffLines(original, currentUpdated[0], 2);
+            renderDiffPreview(context, preview, currentUpdated[0], false, refreshedDiff);
         });
         fullButton.setOnClickListener(view -> {
             AiUiTheme.styleButton(diffButton, AiUiTheme.ButtonKind.SECONDARY);
             AiUiTheme.styleButton(fullButton, AiUiTheme.ButtonKind.PRIMARY);
-            renderDiffPreview(context, preview, updated, true, compactDiff);
+            final List<SimpleLineDiff.Line> refreshedDiff =
+                    SimpleLineDiff.buildCompactDiffLines(original, currentUpdated[0], 2);
+            renderDiffPreview(context, preview, currentUpdated[0], true, refreshedDiff);
         });
     }
 

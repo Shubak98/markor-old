@@ -69,9 +69,10 @@ public final class AiVoiceTeacherDialog {
             final String heading, final String lesson,
             final AiVoiceTeacherHelper.TeacherStyle style, final StyleChangeRequest styleChangeRequest,
             final DoubtRequest doubtRequest, final SaveCallback saveCallback,
-            final MicCallback micCallback) {
+            final MicCallback micCallback,
+            final AiOutputRefineHelper.RefineRequest refineRequest) {
         final Player player = new Player(context, section, heading, lesson, style,
-                styleChangeRequest, doubtRequest, saveCallback, micCallback);
+                styleChangeRequest, doubtRequest, saveCallback, micCallback, refineRequest);
         player.show();
         return player.dialog;
     }
@@ -86,6 +87,7 @@ public final class AiVoiceTeacherDialog {
         private final DoubtRequest doubtRequest;
         private final SaveCallback saveCallback;
         private final MicCallback micCallback;
+        private final AiOutputRefineHelper.RefineRequest refineRequest;
         private final List<Sentence> sentences = new ArrayList<>();
         private final StringBuilder displayedScript = new StringBuilder();
         private final Dialog dialog;
@@ -118,7 +120,8 @@ public final class AiVoiceTeacherDialog {
         private Player(final Context context, final String section, final String heading,
                 final String lesson, final AiVoiceTeacherHelper.TeacherStyle style,
                 final StyleChangeRequest styleChangeRequest, final DoubtRequest doubtRequest,
-                final SaveCallback saveCallback, final MicCallback micCallback) {
+                final SaveCallback saveCallback, final MicCallback micCallback,
+                final AiOutputRefineHelper.RefineRequest refineRequest) {
             this.context = context;
             this.section = section == null ? "" : section;
             this.heading = heading == null ? "" : heading;
@@ -129,6 +132,7 @@ public final class AiVoiceTeacherDialog {
             this.doubtRequest = doubtRequest;
             this.saveCallback = saveCallback;
             this.micCallback = micCallback;
+            this.refineRequest = refineRequest;
 
             final LinearLayout shell = new LinearLayout(context);
             shell.setOrientation(LinearLayout.VERTICAL);
@@ -246,9 +250,11 @@ public final class AiVoiceTeacherDialog {
                     AiUiTheme.ButtonKind.SECONDARY);
             speedButton = AiUiTheme.button(context, "1.0x",
                     AiUiTheme.ButtonKind.SECONDARY);
-            for (Button button : new Button[]{previousButton, playButton, nextButton, replayButton}) {
-                primaryControls.addView(button, AiUiTheme.weightedButtonParams(context));
-            }
+            primaryControls.addView(previousButton, AiUiTheme.weightedButtonParams(context));
+            primaryControls.addView(playButton, AiUiTheme.weightedButtonParams(context));
+            final LinearLayout navigationControls = AiUiTheme.actionRow(context);
+            navigationControls.addView(nextButton, AiUiTheme.weightedButtonParams(context));
+            navigationControls.addView(replayButton, AiUiTheme.weightedButtonParams(context));
             final LinearLayout secondaryControls = AiUiTheme.actionRow(context);
             final Button askButton = AiUiTheme.button(context, "Ask Doubt 🎙️",
                     AiUiTheme.ButtonKind.MIC);
@@ -258,14 +264,27 @@ public final class AiVoiceTeacherDialog {
                     AiUiTheme.ButtonKind.SECONDARY);
             secondaryControls.addView(askButton, AiUiTheme.weightedButtonParams(context));
             secondaryControls.addView(resumeButton, AiUiTheme.weightedButtonParams(context));
-            secondaryControls.addView(speedButton, AiUiTheme.weightedButtonParams(context));
-            secondaryControls.addView(saveButton, AiUiTheme.weightedButtonParams(context));
+            final LinearLayout saveControls = AiUiTheme.actionRow(context);
+            saveControls.addView(speedButton, AiUiTheme.weightedButtonParams(context));
+            saveControls.addView(saveButton, AiUiTheme.weightedButtonParams(context));
             final LinearLayout.LayoutParams controlParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             controlParams.setMargins(AiUiTheme.dp(context, 8), AiUiTheme.dp(context, 8),
                     AiUiTheme.dp(context, 8), AiUiTheme.dp(context, 8));
             footer.addView(primaryControls, controlParams);
+            footer.addView(navigationControls, new LinearLayout.LayoutParams(controlParams));
+            final LinearLayout refineControls = AiUiTheme.actionRow(context);
+            final Button refineButton = AiUiTheme.button(
+                    context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
+            refineControls.addView(refineButton, AiUiTheme.weightedButtonParams(context));
+            final LinearLayout.LayoutParams refineParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            refineParams.setMargins(AiUiTheme.dp(context, 8), 0,
+                    AiUiTheme.dp(context, 8), AiUiTheme.dp(context, 4));
+            footer.addView(refineControls, refineParams);
             footer.addView(secondaryControls, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            footer.addView(saveControls, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             shell.addView(footer);
 
@@ -292,6 +311,17 @@ public final class AiVoiceTeacherDialog {
             askButton.setOnClickListener(view -> openDoubtBar());
             resumeButton.setOnClickListener(view -> resumeMainLesson());
             saveButton.setOnClickListener(view -> save());
+            refineButton.setOnClickListener(view -> {
+                pause();
+                AiOutputRefineHelper.show(context, lesson, refineRequest, refined -> {
+                    replaceLesson(refined);
+                    replay();
+                }, input -> {
+                    if (micCallback != null) {
+                        micCallback.start(input);
+                    }
+                });
+            });
             micButton.setOnClickListener(view -> {
                 if (micCallback != null) {
                     micCallback.start(doubtInput);

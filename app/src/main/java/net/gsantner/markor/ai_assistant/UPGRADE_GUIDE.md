@@ -52,6 +52,12 @@ Notebook root, and the Sync dialog displays the resolved path.
 
 Copy the entire `app/src/main/java/net/gsantner/markor/ai_assistant/` folder into the same path in the new Markor repository. No resource, XML, Gradle, or settings-file changes are required. The folder now includes large-note context selection, gallery image encoding and vision requests, tutor and quiz dialogs, Anki CSV generation, and Mermaid insertion.
 
+The main assistant dialog also supports an optional Markdown heading scope shared by
+its tabs and tools. Scope is cleared by tapping its chip; without a selected heading,
+requests continue to use the whole note. AI output previews include a
+Refine / Edit action for AI follow-ups or direct manual edits before applying, saving,
+or replaying the result.
+
 ## Paste the hook
 
 In the new `DocumentEditAndViewFragment.java`, add the field to the fragment class and paste the initialization inside `onCreate`, directly after `super.onCreate(savedInstanceState)`. This registers the voice and image-picker result launchers before the fragment is started:

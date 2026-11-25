@@ -41,13 +41,22 @@ public final class AiMnemonicsDialog {
     }
 
     public static void show(final Context context, final String markdown, final File file,
-            final AiMnemonicsStore store, final Generator generator, final Actions actions) {
+            final AiMnemonicsStore store, final MarkdownSectionParser.Section selectedSection,
+            final Generator generator, final Actions actions,
+            final AiOutputRefineHelper.RefineRequest refineRequest,
+            final AiOutputRefineHelper.MicCallback refineMic) {
+        if (selectedSection != null) {
+            generateAndPreview(context, markdown, file, selectedSection, store, generator,
+                    actions, refineRequest, refineMic);
+            return;
+        }
         final LinearLayout footer = AiUiTheme.actionRow(context);
         final Button close = AiUiTheme.button(context, "Close", AiUiTheme.ButtonKind.SECONDARY);
         footer.addView(close, AiUiTheme.weightedButtonParams(context));
         final Dialog[] holder = new Dialog[1];
         holder[0] = AiUiTheme.showDialog(context, "Mnemonics",
-                tabs(context, markdown, file, store, generator, actions), footer, null);
+                tabs(context, markdown, file, store, selectedSection, generator, actions,
+                        refineRequest, refineMic), footer, null);
         close.setOnClickListener(view -> holder[0].dismiss());
         final Dialog dialog = holder[0];
         dialog.setCanceledOnTouchOutside(true);
@@ -66,7 +75,10 @@ public final class AiMnemonicsDialog {
     }
 
     private static LinearLayout tabs(final Context context, final String markdown, final File file,
-            final AiMnemonicsStore store, final Generator generator, final Actions actions) {
+            final AiMnemonicsStore store, final MarkdownSectionParser.Section selectedSection,
+            final Generator generator, final Actions actions,
+            final AiOutputRefineHelper.RefineRequest refineRequest,
+            final AiOutputRefineHelper.MicCallback refineMic) {
         final LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout switcher = AiUiTheme.actionRow(context);
@@ -76,7 +88,8 @@ public final class AiMnemonicsDialog {
         switcher.addView(vaultTab, weighted(context));
         root.addView(switcher);
 
-        final LinearLayout create = createView(context, markdown, file, store, generator, actions);
+        final LinearLayout create = createView(context, markdown, file, store, selectedSection,
+                generator, actions, refineRequest, refineMic);
         final LinearLayout vault = new LinearLayout(context);
         vault.setOrientation(LinearLayout.VERTICAL);
         vault.setVisibility(View.GONE);
@@ -100,12 +113,17 @@ public final class AiMnemonicsDialog {
     }
 
     private static LinearLayout createView(final Context context, final String markdown,
-            final File file, final AiMnemonicsStore store, final Generator generator,
-            final Actions actions) {
+            final File file, final AiMnemonicsStore store,
+            final MarkdownSectionParser.Section selectedSection, final Generator generator,
+            final Actions actions, final AiOutputRefineHelper.RefineRequest refineRequest,
+            final AiOutputRefineHelper.MicCallback refineMic) {
         final LinearLayout create = new LinearLayout(context);
         create.setOrientation(LinearLayout.VERTICAL);
         final List<MarkdownSectionParser.Section> sections = MarkdownSectionParser.parse(markdown);
-        if (sections.isEmpty()) {
+        if (selectedSection != null) {
+            generateAndPreview(context, markdown, file, selectedSection, store, generator,
+                    actions, refineRequest, refineMic);
+        } else if (sections.isEmpty()) {
             final TextView empty = AiUiTheme.label(context,
                     "This note has no Markdown headings.", 14);
             empty.setTextColor(AiUiTheme.SECONDARY_TEXT);
@@ -113,14 +131,29 @@ public final class AiMnemonicsDialog {
         } else {
             create.addView(MarkdownTreeViewHelper.create(context, sections, section ->
                     generateAndPreview(context, markdown, file, section, store,
-                            generator, actions)));
+                            generator, actions, refineRequest, refineMic)));
         }
+        final TextView wholeNote = AiUiTheme.label(context, "Whole Note", 14);
+        wholeNote.setPadding(dp(context, 14), dp(context, 12), dp(context, 14), dp(context, 12));
+        wholeNote.setBackground(AiUiTheme.rounded(AiUiTheme.INPUT, dp(context, 12),
+                AiUiTheme.ACCENT, dp(context, 1)));
+        wholeNote.setClickable(true);
+        wholeNote.setFocusable(true);
+        final LinearLayout.LayoutParams wholeParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        wholeParams.topMargin = dp(context, 8);
+        create.addView(wholeNote, wholeParams);
+        wholeNote.setOnClickListener(view -> generateAndPreview(context, markdown, file,
+                MarkdownSectionParser.wholeNote(markdown), store, generator, actions, refineRequest,
+                refineMic));
         return create;
     }
 
     private static void generateAndPreview(final Context context, final String markdown,
             final File file, final MarkdownSectionParser.Section section,
-            final AiMnemonicsStore store, final Generator generator, final Actions actions) {
+            final AiMnemonicsStore store, final Generator generator, final Actions actions,
+            final AiOutputRefineHelper.RefineRequest refineRequest,
+            final AiOutputRefineHelper.MicCallback refineMic) {
         final LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
         body.addView(new ProgressBar(context));
@@ -142,7 +175,7 @@ public final class AiMnemonicsDialog {
                     if (loadingDialog.isShowing()) {
                         loadingDialog.dismiss();
                         showPreview(context, markdown, file, section, mnemonic, store, actions,
-                                generator);
+                                generator, refineRequest, refineMic);
                     }
                 });
             } catch (Exception exception) {
@@ -158,36 +191,68 @@ public final class AiMnemonicsDialog {
 
     private static void showPreview(final Context context, final String markdown, final File file,
             final MarkdownSectionParser.Section section, final Mnemonic mnemonic,
-            final AiMnemonicsStore store, final Actions actions, final Generator generator) {
+            final AiMnemonicsStore store, final Actions actions, final Generator generator,
+            final AiOutputRefineHelper.RefineRequest refineRequest,
+            final AiOutputRefineHelper.MicCallback refineMic) {
+        final Mnemonic[] current = {mnemonic};
         final LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
-        final TextView hook = AiUiTheme.label(context, mnemonic.title + ": " + mnemonic.hook, 16);
+        final TextView hook = AiUiTheme.label(context,
+                current[0].title + ": " + current[0].hook, 16);
         hook.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         hook.setTextColor(Color.WHITE);
         body.addView(hook);
-        final TextView breakdown = AiUiTheme.label(context, mnemonic.breakdown, 14);
+        final TextView breakdown = AiUiTheme.label(context, current[0].breakdown, 14);
         breakdown.setTextColor(Color.rgb(208, 208, 218));
         breakdown.setPadding(0, dp(context, 10), 0, 0);
         body.addView(breakdown);
 
-        final LinearLayout footer = AiUiTheme.actionRow(context);
-        final Button add = AiUiTheme.button(context, "Add to Note & Save",
+        final LinearLayout footer = new LinearLayout(context);
+        footer.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout refineRow = AiUiTheme.actionRow(context);
+        final Button refine = AiUiTheme.button(
+                context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
+        refineRow.addView(refine, AiUiTheme.weightedButtonParams(context));
+        footer.addView(refineRow);
+        final LinearLayout actionRow = AiUiTheme.actionRow(context);
+        final LinearLayout regenerateRow = AiUiTheme.actionRow(context);
+        final Button add = AiUiTheme.button(context, "Add to Note",
                 AiUiTheme.ButtonKind.PRIMARY);
-        final Button vault = AiUiTheme.button(context, "Save to Vault Only",
+        final Button vault = AiUiTheme.button(context, "Vault Only",
                 AiUiTheme.ButtonKind.SECONDARY);
         final Button regenerate = AiUiTheme.button(context, "Regenerate",
                 AiUiTheme.ButtonKind.SECONDARY);
-        footer.addView(add);
-        footer.addView(vault);
-        footer.addView(regenerate);
+        actionRow.addView(add, AiUiTheme.weightedButtonParams(context));
+        actionRow.addView(vault, AiUiTheme.weightedButtonParams(context));
+        regenerateRow.addView(regenerate, AiUiTheme.weightedButtonParams(context));
+        footer.addView(actionRow);
+        footer.addView(regenerateRow);
         final Dialog preview = AiUiTheme.showDialog(context, "Mnemonic Preview",
                 body, footer, null);
+
+        refine.setOnClickListener(view -> {
+            try {
+                AiOutputRefineHelper.show(context, formatMnemonic(current[0]), refineRequest,
+                        refined -> {
+                            try {
+                                current[0] = parseMnemonic(refined);
+                                hook.setText(current[0].title + ": " + current[0].hook);
+                                breakdown.setText(current[0].breakdown);
+                            } catch (IOException exception) {
+                                actions.showError(exception.getMessage());
+                            }
+                        }, refineMic);
+            } catch (IOException exception) {
+                actions.showError(exception.getMessage());
+            }
+        });
 
         vault.setOnClickListener(view -> {
             try {
                 store.saveMnemonic(file.getAbsolutePath(), file.getName(),
                         section.getTitle(), section.getRawHeadingLine(),
-                        mnemonic.title + ": " + mnemonic.hook, mnemonic.breakdown, false);
+                        current[0].title + ": " + current[0].hook,
+                        current[0].breakdown, false);
                 preview.dismiss();
                 Toast.makeText(context, "Saved to Revision Vault", Toast.LENGTH_SHORT).show();
             } catch (IOException exception) {
@@ -196,13 +261,23 @@ public final class AiMnemonicsDialog {
         });
         add.setOnClickListener(view -> {
             preview.dismiss();
-            actions.addToNote(section, mnemonic.title + ": " + mnemonic.hook,
-                    mnemonic.breakdown, store);
+            actions.addToNote(section, current[0].title + ": " + current[0].hook,
+                    current[0].breakdown, store);
         });
         regenerate.setOnClickListener(view -> {
             preview.dismiss();
-            generateAndPreview(context, markdown, file, section, store, generator, actions);
+            generateAndPreview(context, markdown, file, section, store, generator, actions,
+                    refineRequest, refineMic);
         });
+    }
+
+    private static String formatMnemonic(final Mnemonic mnemonic) throws IOException {
+        try {
+            return new JSONObject().put("title", mnemonic.title).put("hook", mnemonic.hook)
+                    .put("breakdown", mnemonic.breakdown).toString();
+        } catch (org.json.JSONException exception) {
+            throw new IOException("Could not prepare the mnemonic for refinement.", exception);
+        }
     }
 
     private static void renderVault(final Context context, final LinearLayout vault,

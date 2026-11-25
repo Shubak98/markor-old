@@ -43,14 +43,15 @@ public final class AiStudyDialogs {
 
     public static void showTutorChat(final Context context, final String fileKey,
             final String markdown, final TutorRequest request, final AppendCallback append,
-            final MicCallback mic, final String imageBase64) {
+            final MicCallback mic, final String imageBase64,
+            final AiOutputRefineHelper.RefineRequest refineRequest) {
         final LinearLayout chat = new LinearLayout(context);
         chat.setOrientation(LinearLayout.VERTICAL);
         chat.setTag(append);
         final List<Turn> turns = getTurns(fileKey);
         final String[] pendingImage = {imageBase64};
         for (Turn turn : turns) {
-            addBubble(context, chat, turn);
+            addBubble(context, chat, turn, refineRequest, mic);
         }
 
         final EditText input = new EditText(context);
@@ -88,7 +89,7 @@ public final class AiStudyDialogs {
             final Turn userTurn = new Turn(true, question);
             turns.add(userTurn);
             trimTurns(turns);
-            addBubble(context, chat, userTurn);
+            addBubble(context, chat, userTurn, refineRequest, mic);
             input.setText("");
             sendButton.setEnabled(false);
             final String imageForRequest = pendingImage[0];
@@ -102,7 +103,7 @@ public final class AiStudyDialogs {
                 final Turn assistantTurn = new Turn(false, answer);
                 turns.add(assistantTurn);
                 trimTurns(turns);
-                addBubble(context, chat, assistantTurn);
+                addBubble(context, chat, assistantTurn, refineRequest, mic);
             });
         });
     }
@@ -123,7 +124,8 @@ public final class AiStudyDialogs {
         }
     }
 
-    private static void addBubble(final Context context, final LinearLayout parent, final Turn turn) {
+    private static void addBubble(final Context context, final LinearLayout parent, final Turn turn,
+            final AiOutputRefineHelper.RefineRequest refineRequest, final MicCallback mic) {
         final LinearLayout bubble = new LinearLayout(context);
         bubble.setOrientation(LinearLayout.VERTICAL);
         bubble.setPadding(AiUiTheme.dp(context, 12), AiUiTheme.dp(context, 9),
@@ -138,10 +140,19 @@ public final class AiStudyDialogs {
             final LinearLayout row = AiUiTheme.actionRow(context);
             final TextView copy = AiUiTheme.headerAction(context, "Copy");
             final TextView append = AiUiTheme.headerAction(context, "Append to Note");
+            final TextView refine = AiUiTheme.headerAction(context, "✏ Refine / Edit");
             copy.setTextSize(12);
             append.setTextSize(12);
+            refine.setTextSize(12);
+            copy.setSingleLine(true);
+            append.setSingleLine(true);
+            refine.setSingleLine(true);
+            copy.setMaxLines(1);
+            append.setMaxLines(1);
+            refine.setMaxLines(1);
             row.addView(copy);
             row.addView(append);
+            row.addView(refine);
             bubble.addView(row);
             copy.setOnClickListener(view -> copy(context, turn.text, "Tutor response"));
             append.setOnClickListener(view -> {
@@ -149,6 +160,15 @@ public final class AiStudyDialogs {
                     ((AppendCallback) parent.getTag()).append(turn.text);
                 }
             });
+            refine.setOnClickListener(view -> AiOutputRefineHelper.show(context, turn.text,
+                    refineRequest, refined -> {
+                        turn.text = refined;
+                        text.setText(refined);
+                    }, input -> {
+                        if (mic != null) {
+                            mic.start(input);
+                        }
+                    }));
         }
         final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -159,7 +179,9 @@ public final class AiStudyDialogs {
     }
 
     public static void showQuiz(final Context context, final List<Question> questions,
-            final AppendCallback saveQuiz) {
+            final AppendCallback saveQuiz,
+            final AiOutputRefineHelper.RefineRequest refineRequest,
+            final AiOutputRefineHelper.MicCallback refineMic) {
         final LinearLayout body = new LinearLayout(context);
         body.setOrientation(LinearLayout.VERTICAL);
         final TextView score = AiUiTheme.label(context, "Score: 0/" + questions.size(), 14);
@@ -224,12 +246,35 @@ public final class AiStudyDialogs {
             cardParams.setMargins(0, AiUiTheme.dp(context, 10), 0, 0);
             body.addView(card, cardParams);
         }
-        final LinearLayout actions = AiUiTheme.actionRow(context);
-        final Button save = AiUiTheme.button(context, "Save Quiz to Note", AiUiTheme.ButtonKind.PRIMARY);
+        final LinearLayout actions = new LinearLayout(context);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout refineRow = AiUiTheme.actionRow(context);
+        final Button refine = AiUiTheme.button(
+                context, "✏ Refine / Edit", AiUiTheme.ButtonKind.SECONDARY);
+        refineRow.addView(refine, AiUiTheme.weightedButtonParams(context));
+        actions.addView(refineRow);
+        final LinearLayout saveRow = AiUiTheme.actionRow(context);
+        final Button save = AiUiTheme.button(context, "Save to Note", AiUiTheme.ButtonKind.PRIMARY);
         final Button close = AiUiTheme.button(context, "Close", AiUiTheme.ButtonKind.SECONDARY);
-        actions.addView(save, AiUiTheme.weightedButtonParams(context));
-        actions.addView(close, AiUiTheme.weightedButtonParams(context));
+        saveRow.addView(save, AiUiTheme.weightedButtonParams(context));
+        saveRow.addView(close, AiUiTheme.weightedButtonParams(context));
+        actions.addView(saveRow);
         final android.app.Dialog dialog = AiUiTheme.showDialog(context, "MCQ Quiz", body, actions, null);
+        refine.setOnClickListener(view -> {
+            try {
+                AiOutputRefineHelper.show(context, quizToJson(questions), refineRequest, refined -> {
+                    try {
+                        final List<Question> updated = parseQuiz(refined);
+                        dialog.dismiss();
+                        showQuiz(context, updated, saveQuiz, refineRequest, refineMic);
+                    } catch (IOException exception) {
+                        Toast.makeText(context, exception.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                }, refineMic);
+            } catch (IOException exception) {
+                Toast.makeText(context, exception.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
         close.setOnClickListener(view -> dialog.dismiss());
         save.setOnClickListener(view -> {
             final StringBuilder markdown = new StringBuilder("## Practice Quiz\n\n");
@@ -240,6 +285,7 @@ public final class AiStudyDialogs {
                     markdown.append("- ").append((char) ('A' + option)).append(". ")
                             .append(question.options.get(option)).append('\n');
                 }
+
                 markdown.append("**Answer:** ")
                         .append(question.options.get(question.correctIndex))
                         .append("\n\n").append(question.explanation).append("\n\n");
@@ -247,6 +293,26 @@ public final class AiStudyDialogs {
             dialog.dismiss();
             saveQuiz.append(markdown.toString());
         });
+    }
+
+    private static String quizToJson(final List<Question> questions) throws IOException {
+        try {
+            final org.json.JSONArray array = new org.json.JSONArray();
+            for (Question question : questions) {
+                final org.json.JSONArray options = new org.json.JSONArray();
+                for (String option : question.options) {
+                    options.put(option);
+                }
+                array.put(new org.json.JSONObject()
+                        .put("question", question.question)
+                        .put("options", options)
+                        .put("correctIndex", question.correctIndex)
+                        .put("explanation", question.explanation));
+            }
+            return new org.json.JSONObject().put("questions", array).toString();
+        } catch (org.json.JSONException exception) {
+            throw new IOException("Could not prepare the quiz for refinement.", exception);
+        }
     }
 
     public static List<Question> parseQuiz(final String json) throws IOException {
@@ -298,7 +364,7 @@ public final class AiStudyDialogs {
 
     public static final class Turn {
         private final boolean user;
-        private final String text;
+        private String text;
 
         private Turn(final boolean user, final String text) {
             this.user = user;
