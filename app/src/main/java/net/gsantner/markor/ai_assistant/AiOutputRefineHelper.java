@@ -33,6 +33,12 @@ public final class AiOutputRefineHelper {
     private AiOutputRefineHelper() {
     }
 
+    public static String buildSystemPrompt() {
+        return AiLanguagePromptHelper.ensureDefaultEnglishRule(
+                "You are a precise editor. Follow the refinement instruction and preserve the current "
+                        + "output's format. Return only the revised output.");
+    }
+
     public static String buildPrompt(final String currentOutput, final String instruction) {
         final String output = currentOutput == null ? "" : currentOutput;
         final String request = instruction == null ? "" : instruction.trim();

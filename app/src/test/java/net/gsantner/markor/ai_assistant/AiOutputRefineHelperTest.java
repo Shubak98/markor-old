@@ -13,4 +13,11 @@ public class AiOutputRefineHelperTest {
                 .contains("Refinement instruction:\nMake it shorter")
                 .contains("Return only the complete revised output");
     }
+
+    @Test
+    public void refinementSystemPromptIncludesDefaultEnglishRule() {
+        assertThat(AiOutputRefineHelper.buildSystemPrompt())
+                .startsWith(AiLanguagePromptHelper.DEFAULT_ENGLISH_RULE)
+                .contains("Follow the refinement instruction");
+    }
 }

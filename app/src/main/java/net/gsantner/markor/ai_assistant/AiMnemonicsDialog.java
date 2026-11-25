@@ -40,6 +40,15 @@ public final class AiMnemonicsDialog {
     private AiMnemonicsDialog() {
     }
 
+    static String buildSystemPrompt() {
+        return AiLanguagePromptHelper.ensureDefaultEnglishRule(
+                "You are creating a UPSC Civil Services (UPSC) study mnemonic from exactly this Markdown "
+                        + "section. Use a crisp, memorable acronym or English-language memory hook. Give a clean "
+                        + "line-by-line mapping of each letter or word to the exact facts in the section; do not "
+                        + "add unsupported facts.\nReturn strict JSON only: { \"title\": \"...\", "
+                        + "\"hook\": \"...\", \"breakdown\": \"...\" }");
+    }
+
     public static void show(final Context context, final String markdown, final File file,
             final AiMnemonicsStore store, final MarkdownSectionParser.Section selectedSection,
             final Generator generator, final Actions actions,

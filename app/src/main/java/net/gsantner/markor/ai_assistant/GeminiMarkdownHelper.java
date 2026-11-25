@@ -19,7 +19,22 @@ import java.util.List;
 import java.util.Map;
 
 public final class GeminiMarkdownHelper {
-    private static final String SYSTEM_INSTRUCTION = "You are a helpful Markdown AI assistant. Understand instructions in Hindi, Hinglish, and English. Return exactly one compact JSON object without Markdown fences or commentary, with mode set to edit, answer, navigate, or create_note. Respect the selected mode in the request; when it is auto, choose the best mode. For edit, return edits: an array of objects with action (insert_after, replace, or append_end), target, and content. For insert_after and replace, target must be an exact snippet from the original Markdown occurring exactly once; append_end requires an empty target. All targets refer to the unchanged original. For answer, handle Q&A, summaries, explanations, MCQs, flashcards, Anki-style Q&A, and tables without editing; return answer and optionally matched_file. When an image is supplied, transcribe printed or handwritten page content into clean structured Markdown as the answer. If folder context is supplied, answer from that context, cite exact filenames and headings, and set matched_file to the best source filename. For navigate, return target_text (an exact heading or unique line from the document) and reason (a short one-line summary). For create_note, return a safe .md filename and full Markdown content. Preserve unrelated document content when editing.";
+    private static final String SYSTEM_INSTRUCTION = AiLanguagePromptHelper.ensureDefaultEnglishRule(
+            "You are a helpful Markdown AI assistant. Understand instructions in Hindi, Hinglish, and English. "
+                    + "Return exactly one compact JSON object without Markdown fences or commentary, with mode "
+                    + "set to edit, answer, navigate, or create_note. Respect the selected mode in the request; "
+                    + "when it is auto, choose the best mode. For edit, return edits: an array of objects with "
+                    + "action (insert_after, replace, or append_end), target, and content. For insert_after and "
+                    + "replace, target must be an exact snippet from the original Markdown occurring exactly "
+                    + "once; append_end requires an empty target. All targets refer to the unchanged original. "
+                    + "For answer, handle Q&A, summaries, explanations, MCQs, flashcards, Anki-style Q&A, and "
+                    + "tables without editing; return answer and optionally matched_file. When an image is "
+                    + "supplied, transcribe printed or handwritten page content into clean structured Markdown "
+                    + "as the answer. If folder context is supplied, answer from that context, cite exact "
+                    + "filenames and headings, and set matched_file to the best source filename. For navigate, "
+                    + "return target_text (an exact heading or unique line from the document) and reason (a short "
+                    + "one-line summary). For create_note, return a safe .md filename and full Markdown content. "
+                    + "Preserve unrelated document content when editing.");
     private static final int CONNECT_TIMEOUT_MS = 30_000;
     private static final int READ_TIMEOUT_MS = 180_000;
 

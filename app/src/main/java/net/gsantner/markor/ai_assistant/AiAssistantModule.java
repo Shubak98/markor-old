@@ -1864,14 +1864,8 @@ public final class AiAssistantModule {
             return;
         }
         AiMnemonicsDialog.show(context, markdown, currentFile, mnemonicsStore, selectedSection, section ->
-                new AiProviderRouter(settingsStore).generateRawCompletion(
-                        section.getContent(),
-                        "You are creating a UPSC Civil Services (UPSC) study mnemonic from exactly "
-                                + "this Markdown section. Use a crisp, memorable acronym or English-medium "
-                                + "Hinglish memory hook. Give a clean line-by-line mapping of each "
-                                + "letter or word to the exact facts in the section; do not add unsupported facts.\n"
-                                + "Return strict JSON only: { \"title\": \"...\", \"hook\": \"...\", "
-                                + "\"breakdown\": \"...\" }",
+                new AiProviderRouter(settingsStore).generateNonTeacherRawCompletion(
+                        section.getContent(), AiMnemonicsDialog.buildSystemPrompt(),
                         "Create the mnemonic for this section."),
                 new AiMnemonicsDialog.Actions() {
                     @Override
@@ -2165,9 +2159,8 @@ public final class AiAssistantModule {
     private AiOutputRefineHelper.RefineRequest createOutputRefineRequest() {
         return (currentOutput, instruction, callback) -> EXECUTOR.execute(() -> {
             try {
-                final String output = new AiProviderRouter(settingsStore).generateRawCompletion(
-                        "You are a precise editor. Follow the refinement instruction and preserve the "
-                                + "current output's format. Return only the revised output.",
+                final String output = new AiProviderRouter(settingsStore).generateNonTeacherRawCompletion(
+                        AiOutputRefineHelper.buildSystemPrompt(),
                         AiOutputRefineHelper.buildPrompt(currentOutput, instruction));
                 MAIN_HANDLER.post(() -> callback.onResult(output, null));
             } catch (IOException exception) {

@@ -130,6 +130,11 @@ public final class AiProviderRouter {
                 .getIntentResult().getAnswer();
     }
 
+    public String generateNonTeacherRawCompletion(final String systemPrompt, final String userPrompt)
+            throws IOException {
+        return generateRawCompletion(buildNonTeacherSystemPrompt(systemPrompt), userPrompt);
+    }
+
     public String generateRawCompletion(final String markdown, final String systemPrompt,
             final String instruction) throws IOException {
         return execute(settingsStore.getProviderConfigs(), settingsStore.getPrimaryProvider(),
@@ -146,6 +151,15 @@ public final class AiProviderRouter {
                     }
                     return rawIntentResult(config, systemPrompt, prompt);
                 }).getIntentResult().getAnswer();
+    }
+
+    public String generateNonTeacherRawCompletion(final String markdown, final String systemPrompt,
+            final String instruction) throws IOException {
+        return generateRawCompletion(markdown, buildNonTeacherSystemPrompt(systemPrompt), instruction);
+    }
+
+    static String buildNonTeacherSystemPrompt(final String systemPrompt) {
+        return AiLanguagePromptHelper.ensureDefaultEnglishRule(systemPrompt);
     }
 
     private static GeminiMarkdownHelper.IntentResult rawIntentResult(final ProviderConfig config,
