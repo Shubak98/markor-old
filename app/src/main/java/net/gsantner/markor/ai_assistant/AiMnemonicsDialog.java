@@ -172,7 +172,7 @@ public final class AiMnemonicsDialog {
         final LinearLayout actionsRow = AiUiTheme.actionRow(context);
         final Button cancel = AiUiTheme.button(context, "Cancel", AiUiTheme.ButtonKind.SECONDARY);
         actionsRow.addView(cancel, AiUiTheme.weightedButtonParams(context));
-        final Dialog loadingDialog = AiUiTheme.showCompactDialog(context,
+        final AiUiTheme.MinimizableDialog loadingDialog = AiUiTheme.showCompactDialog(context,
                 "Mnemonic Generator", body, actionsRow);
         cancel.setOnClickListener(view -> loadingDialog.dismiss());
 
@@ -181,18 +181,18 @@ public final class AiMnemonicsDialog {
                 final String raw = generator.generate(section);
                 final Mnemonic mnemonic = parseMnemonic(raw);
                 new Handler(Looper.getMainLooper()).post(() -> {
-                    if (loadingDialog.isShowing()) {
+                    AiUiTheme.runWhenResumed(loadingDialog, () -> {
                         loadingDialog.dismiss();
                         showPreview(context, markdown, file, section, mnemonic, store, actions,
                                 generator, refineRequest, refineMic);
-                    }
+                    });
                 });
             } catch (Exception exception) {
                 new Handler(Looper.getMainLooper()).post(() -> {
-                    if (loadingDialog.isShowing()) {
+                    AiUiTheme.runWhenResumed(loadingDialog, () -> {
                         loadingDialog.dismiss();
                         actions.showError(exception.getMessage());
-                    }
+                    });
                 });
             }
         }).start();

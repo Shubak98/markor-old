@@ -268,6 +268,10 @@ public final class AiVoiceTeacherDialog {
             final LinearLayout saveControls = AiUiTheme.actionRow(context);
             saveControls.addView(speedButton, AiUiTheme.weightedButtonParams(context));
             saveControls.addView(saveButton, AiUiTheme.weightedButtonParams(context));
+            final LinearLayout closeControls = AiUiTheme.actionRow(context);
+            final Button closeButton = AiUiTheme.button(
+                    context, "Close", AiUiTheme.ButtonKind.SECONDARY);
+            closeControls.addView(closeButton, AiUiTheme.weightedButtonParams(context));
             final LinearLayout.LayoutParams controlParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             controlParams.setMargins(AiUiTheme.dp(context, 8), AiUiTheme.dp(context, 8),
@@ -287,22 +291,24 @@ public final class AiVoiceTeacherDialog {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             footer.addView(saveControls, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            footer.addView(closeControls, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             shell.addView(footer);
 
-            dialog = new Dialog(context);
-            final TextView minimizeAction =
-                    AiUiTheme.minimizeAction(context, dialog, "AI Voice Teacher");
-            minimizeAction.setOnClickListener(view -> {
+            final AiUiTheme.MinimizableDialog minimizableDialog =
+                    new AiUiTheme.MinimizableDialog(context);
+            dialog = minimizableDialog;
+            minimizableDialog.setOnMinimize(() -> {
                 pause();
                 AiUiTheme.minimizeDialog(context, dialog, "AI Voice Teacher");
             });
+            final TextView minimizeAction =
+                    AiUiTheme.minimizeAction(context, dialog, "AI Voice Teacher");
             header.addView(minimizeAction, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, AiUiTheme.dp(context, 36)));
-            header.addView(AiUiTheme.closeAction(context, dialog, "AI Voice Teacher"),
-                    new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT, AiUiTheme.dp(context, 36)));
             dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             dialog.setContentView(shell);
+            dialog.setCancelable(true);
             dialog.setCanceledOnTouchOutside(true);
             final Window window = dialog.getWindow();
             if (window != null) {
@@ -323,6 +329,7 @@ public final class AiVoiceTeacherDialog {
             askButton.setOnClickListener(view -> openDoubtBar());
             resumeButton.setOnClickListener(view -> resumeMainLesson());
             saveButton.setOnClickListener(view -> save());
+            closeButton.setOnClickListener(view -> dialog.dismiss());
             refineButton.setOnClickListener(view -> {
                 pause();
                 AiOutputRefineHelper.show(context, lesson, refineRequest, refined -> {

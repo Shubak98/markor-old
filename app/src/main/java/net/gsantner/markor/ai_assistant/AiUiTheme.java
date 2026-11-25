@@ -58,6 +58,68 @@ public final class AiUiTheme {
         void onDismiss(Dialog dialog);
     }
 
+    public static final class MinimizableDialog extends Dialog {
+        private Runnable onMinimize = () -> { };
+        private Runnable onResume;
+        private boolean minimized;
+        private boolean dismissed;
+
+        public MinimizableDialog(final Context context) {
+            super(context);
+            setCancelable(true);
+            setCanceledOnTouchOutside(true);
+        }
+
+        public void setOnMinimize(final Runnable onMinimize) {
+            this.onMinimize = onMinimize == null ? () -> { } : onMinimize;
+        }
+
+        public void setOnResume(final Runnable onResume) {
+            this.onResume = onResume;
+        }
+
+        public boolean isMinimized() {
+            return minimized;
+        }
+
+        public boolean isDismissed() {
+            return dismissed;
+        }
+
+        @Override
+        public void cancel() {
+            onMinimize.run();
+        }
+
+        @Override
+        public void onBackPressed() {
+            onMinimize.run();
+        }
+
+        @Override
+        public void show() {
+            final boolean wasMinimized = minimized;
+            minimized = false;
+            super.show();
+            if (wasMinimized && onResume != null) {
+                final Runnable resumeCallback = onResume;
+                onResume = null;
+                resumeCallback.run();
+            }
+        }
+
+        @Override
+        public void dismiss() {
+            dismissed = true;
+            minimized = false;
+            super.dismiss();
+        }
+
+        public void forceDismiss() {
+            dismiss();
+        }
+    }
+
     private static DialogLifecycleHandler dialogLifecycleHandler;
     private static final WeakHashMap<Dialog, DialogLifecycleHandler> dialogLifecycleHandlers =
             new WeakHashMap<>();
@@ -94,6 +156,9 @@ public final class AiUiTheme {
         if (dialog == null) {
             return;
         }
+        if (dialog instanceof MinimizableDialog) {
+            ((MinimizableDialog) dialog).minimized = true;
+        }
         final DialogLifecycleHandler handler = lifecycleHandlerFor(dialog);
         if (handler != null) {
             handler.onMinimize(dialog, label);
@@ -111,6 +176,17 @@ public final class AiUiTheme {
         return action;
     }
 
+    public static void runWhenResumed(final MinimizableDialog dialog, final Runnable action) {
+        if (dialog.isDismissed()) {
+            return;
+        }
+        if (dialog.isMinimized()) {
+            dialog.setOnResume(action);
+        } else if (dialog.isShowing()) {
+            action.run();
+        }
+    }
+
     private static DialogLifecycleHandler lifecycleHandlerFor(final Dialog dialog) {
         DialogLifecycleHandler handler = dialogLifecycleHandlers.get(dialog);
         if (handler == null) {
@@ -122,16 +198,10 @@ public final class AiUiTheme {
         return handler;
     }
 
-    public static TextView closeAction(final Context context, final Dialog dialog,
-            final String label) {
-        final TextView action = windowAction(context, "×", "Close " + label, SECONDARY_BORDER);
-        action.setOnClickListener(view -> dialog.dismiss());
-        return action;
-    }
-
     public static Dialog showDialog(final Context context, final String title, final View body,
             final View footer, final View headerAction) {
-        final Dialog dialog = new Dialog(context);
+        final MinimizableDialog dialog = new MinimizableDialog(context);
+        dialog.setOnMinimize(() -> minimizeDialog(context, dialog, title));
         setOnDismissListener(dialog, null);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
@@ -164,7 +234,6 @@ public final class AiUiTheme {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         dialog.setContentView(shell);
-        dialog.setCanceledOnTouchOutside(true);
         final Window window = dialog.getWindow();
         if (window != null) {
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -181,9 +250,10 @@ public final class AiUiTheme {
         return dialog;
     }
 
-    public static Dialog showCompactDialog(final Context context, final String title,
+    public static MinimizableDialog showCompactDialog(final Context context, final String title,
             final View body, final View footer) {
-        final Dialog dialog = new Dialog(context);
+        final MinimizableDialog dialog = new MinimizableDialog(context);
+        dialog.setOnMinimize(() -> minimizeDialog(context, dialog, title));
         setOnDismissListener(dialog, null);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
@@ -191,7 +261,7 @@ public final class AiUiTheme {
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackground(rounded(SURFACE, dp(context, 20), SURFACE_BORDER, dp(context, 1)));
         shell.setClipToOutline(true);
-        shell.addView(createHeader(context, title, null, null),
+        shell.addView(createHeader(context, title, null, dialog),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
         body.setPadding(dp(context, 16), dp(context, 12), dp(context, 16), dp(context, 12));
@@ -205,7 +275,6 @@ public final class AiUiTheme {
         shell.addView(footer, footerParams);
 
         dialog.setContentView(shell);
-        dialog.setCanceledOnTouchOutside(true);
         final Window window = dialog.getWindow();
         if (window != null) {
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -358,6 +427,13 @@ public final class AiUiTheme {
         return action;
     }
 
+    public static TextView headerPill(final Context context, final String label) {
+        final TextView action = windowAction(context, label, label, ACCENT);
+        action.setTextSize(12);
+        action.setPadding(dp(context, 10), 0, dp(context, 10), 0);
+        return action;
+    }
+
     public static TextView label(final Context context, final String text, final int size) {
         final TextView label = new TextView(context);
         label.setText(text);
@@ -403,7 +479,6 @@ public final class AiUiTheme {
         row.addView(titleView, titleParams);
         if (dialog != null) {
             addHeaderAction(context, row, minimizeAction(context, dialog, title));
-            addHeaderAction(context, row, closeAction(context, dialog, title));
         }
         header.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));

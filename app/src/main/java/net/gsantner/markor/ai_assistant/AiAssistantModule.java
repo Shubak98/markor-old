@@ -315,13 +315,7 @@ public final class AiAssistantModule {
     }
 
     public void onDestroyView() {
-        final List<MinimizedDialog> minimized = new ArrayList<>(minimizedDialogs);
-        minimizedDialogs.clear();
-        activeMinimizedDialog = null;
-        activeMinimizedLabel = null;
-        for (MinimizedDialog item : minimized) {
-            item.dialog.dismiss();
-        }
+        clearMinimizedDialogs();
         AiUiTheme.clearDialogLifecycleHandler(dialogLifecycleHandler);
         dialogLifecycleHandler = null;
         if (floatingButton != null && floatingButton.getParent() instanceof ViewGroup) {
@@ -329,6 +323,17 @@ public final class AiAssistantModule {
         }
         floatingButton = null;
         activeInstructionInput = null;
+    }
+
+    private void clearMinimizedDialogs() {
+        final List<MinimizedDialog> minimized = new ArrayList<>(minimizedDialogs);
+        minimizedDialogs.clear();
+        activeMinimizedDialog = null;
+        activeMinimizedLabel = null;
+        for (MinimizedDialog item : minimized) {
+            item.dialog.dismiss();
+        }
+        refreshFloatingButton();
     }
 
     public void attachFloatingButton(final View rootView, final EditText editText, final File currentFile,
@@ -406,7 +411,8 @@ public final class AiAssistantModule {
         final LinearLayout content = verticalLayout(context);
         final String[] selectedMode = {"auto"};
         final MarkdownSectionParser.Section[] selectedSection = {null};
-        addModeChips(context, content, selectedMode, currentFile != null);
+        final TextView[] modeChips = addModeChips(context, content,
+                selectedMode, currentFile != null);
         if (currentFile == null) {
             final TextView availability = AiUiTheme.label(context,
                     "No file is open. Edit, Jump, and note-based study actions require an open note. "
@@ -511,6 +517,7 @@ public final class AiAssistantModule {
         final TextView syncButton = createSyncButton(context);
         final TextView vaultButton = AiUiTheme.headerAction(context, "Vault");
         vaultButton.setContentDescription("Mnemonics Vault");
+        final TextView resetButton = AiUiTheme.headerPill(context, "Reset");
         final LinearLayout headerActions = AiUiTheme.actionRow(context);
         final LinearLayout.LayoutParams allDiffsParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36));
@@ -524,6 +531,8 @@ public final class AiAssistantModule {
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
         headerActions.addView(settingsButton, new LinearLayout.LayoutParams(
                 dp(context, 40), dp(context, 40)));
+        headerActions.addView(resetButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
         IOException historyReadError = null;
         try {
             updateAllDiffsButton(allDiffsButton);
@@ -557,6 +566,19 @@ public final class AiAssistantModule {
             });
         });
         settingsButton.setOnClickListener(view -> showSettingsDialog());
+        resetButton.setOnClickListener(view -> {
+            instructions.setText("");
+            attachedImage[0] = null;
+            imageChip.setVisibility(View.GONE);
+            selectedSection[0] = null;
+            scopeChip.setVisibility(View.GONE);
+            selectedMode[0] = "auto";
+            for (int index = 0; index < modeChips.length; index++) {
+                AiUiTheme.styleChip(modeChips[index], index == 0);
+            }
+            clearMinimizedDialogs();
+            dialog.dismiss();
+        });
         vaultButton.setOnClickListener(view -> showMnemonicsVault(context));
         allDiffsButton.setOnClickListener(view -> showAllDiffsDialog(context, editText, allDiffsButton));
         syncButton.setOnClickListener(view -> showGitHubSyncDialog(context, editText));
@@ -747,7 +769,8 @@ public final class AiAssistantModule {
         }
     }
 
-    private static void addModeChips(final android.content.Context context, final LinearLayout parent,
+    private static TextView[] addModeChips(final android.content.Context context,
+            final LinearLayout parent,
             final String[] selectedMode, final boolean hasCurrentFile) {
         final String[][] modes = {
                 {"auto", "Auto"}, {"teacher", "AI Teacher"}, {"mnemonics", "Mnemonics"}, {"edit", "Edit"},
@@ -799,6 +822,7 @@ public final class AiAssistantModule {
         horizontalScroll.addView(row);
         parent.addView(horizontalScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return chips;
     }
 
     private TextView createAllDiffsButton(final android.content.Context context) {
@@ -851,7 +875,9 @@ public final class AiAssistantModule {
         if (context == null) {
             return;
         }
-        final Dialog dialog = new Dialog(context);
+        final AiUiTheme.MinimizableDialog dialog = new AiUiTheme.MinimizableDialog(context);
+        dialog.setOnMinimize(
+                () -> AiUiTheme.minimizeDialog(context, dialog, "GitHub Notes Sync"));
         AiUiTheme.setOnDismissListener(dialog, null);
         final LinearLayout shell = verticalLayout(context);
         shell.setBackground(AiUiTheme.cardBackground(context));
@@ -868,9 +894,6 @@ public final class AiAssistantModule {
         settingsButton.setContentDescription("Sync Settings");
         titleRow.addView(settingsButton, new LinearLayout.LayoutParams(dp(context, 40), dp(context, 40)));
         titleRow.addView(AiUiTheme.minimizeAction(context, dialog, "GitHub Notes Sync"),
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
-        titleRow.addView(AiUiTheme.closeAction(context, dialog, "GitHub Notes Sync"),
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
         header.addView(titleRow);
@@ -2228,7 +2251,7 @@ public final class AiAssistantModule {
         final LinearLayout actions = AiUiTheme.actionRow(context);
         final Button cancel = AiUiTheme.button(context, "Cancel", AiUiTheme.ButtonKind.SECONDARY);
         actions.addView(cancel, AiUiTheme.weightedButtonParams(context));
-        final Dialog loadingDialog = AiUiTheme.showCompactDialog(
+        final AiUiTheme.MinimizableDialog loadingDialog = AiUiTheme.showCompactDialog(
                 context, "AI Voice Teacher", body, actions);
         cancel.setOnClickListener(view -> loadingDialog.dismiss());
 
@@ -2242,19 +2265,24 @@ public final class AiAssistantModule {
                     throw new IOException("The AI provider returned an empty spoken lesson.");
                 }
                 MAIN_HANDLER.post(() -> {
-                    if (!loadingDialog.isShowing() || getContext() == null) {
-                        return;
-                    }
-                    loadingDialog.dismiss();
-                    showVoiceTeacherPlayer(editText, section, heading, lesson, selectedStyle, noteScope);
+                    AiUiTheme.runWhenResumed(loadingDialog, () -> {
+                        if (getContext() == null) {
+                            loadingDialog.dismiss();
+                            return;
+                        }
+                        loadingDialog.dismiss();
+                        showVoiceTeacherPlayer(
+                                editText, section, heading, lesson, selectedStyle, noteScope);
+                    });
                 });
             } catch (IOException exception) {
                 MAIN_HANDLER.post(() -> {
-                    if (!loadingDialog.isShowing() || getContext() == null) {
-                        return;
-                    }
-                    loadingDialog.dismiss();
-                    showError(exception.getMessage());
+                    AiUiTheme.runWhenResumed(loadingDialog, () -> {
+                        loadingDialog.dismiss();
+                        if (getContext() != null) {
+                            showError(exception.getMessage());
+                        }
+                    });
                 });
             }
         });
