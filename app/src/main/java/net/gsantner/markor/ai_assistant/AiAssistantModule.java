@@ -39,6 +39,9 @@ import androidx.activity.result.ActivityResultCaller;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleEventObserver;
+import androidx.lifecycle.LifecycleOwner;
 
 import net.gsantner.markor.ApplicationObject;
 
@@ -53,6 +56,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -97,8 +101,14 @@ public final class AiAssistantModule {
     private final AiSettingsStore settingsStore;
     private final AiDiffHistoryStore diffHistoryStore;
     private final AiMnemonicsStore mnemonicsStore;
+    private AiUiTheme.DialogLifecycleHandler dialogLifecycleHandler;
+    private LifecycleOwner lifecycleOwner;
+    private LifecycleEventObserver lifecycleObserver;
+    private final List<MinimizedDialog> minimizedDialogs = new ArrayList<>();
     private EditText activeInstructionInput;
     private View floatingButton;
+    private Dialog activeMinimizedDialog;
+    private String activeMinimizedLabel;
     private Runnable onAfterApply = () -> { };
     private boolean isViewModeVisible;
     private File currentFile;
@@ -106,6 +116,16 @@ public final class AiAssistantModule {
     private OpenFileCallback openFileCallback;
     private ImageResultCallback pendingImageCallback;
     private SettingsImportCallback pendingSettingsImportCallback;
+
+    private static final class MinimizedDialog {
+        private final Dialog dialog;
+        private final String label;
+
+        private MinimizedDialog(final Dialog dialog, final String label) {
+            this.dialog = dialog;
+            this.label = label;
+        }
+    }
 
     public AiAssistantModule(final Fragment fragment) {
         this.fragment = fragment;
@@ -119,6 +139,8 @@ public final class AiAssistantModule {
                 new ActivityResultContracts.GetContent(), this::onImageSelected);
         settingsImportLauncher = fragment.registerForActivityResult(
                 new ActivityResultContracts.GetContent(), this::onSettingsImportPicked);
+        registerMinimizeHandler();
+        observeLifecycle(fragment);
     }
 
     public AiAssistantModule(final ActivityResultCaller resultCaller,
@@ -139,9 +161,15 @@ public final class AiAssistantModule {
                 new ActivityResultContracts.GetContent(), this::onImageSelected);
         settingsImportLauncher = resultCaller.registerForActivityResult(
                 new ActivityResultContracts.GetContent(), this::onSettingsImportPicked);
+        registerMinimizeHandler();
+        observeLifecycle(resultCaller);
     }
 
     public void openMainAssistantDialog() {
+        registerMinimizeHandler();
+        if (resumeMinimizedDialog()) {
+            return;
+        }
         currentFile = null;
         scrollCallback = null;
         final android.content.Context context = getContext();
@@ -152,6 +180,7 @@ public final class AiAssistantModule {
     }
 
     public void openGitHubSyncDialog() {
+        registerMinimizeHandler();
         currentFile = null;
         showGitHubSyncDialog(getContext(), null);
     }
@@ -164,6 +193,144 @@ public final class AiAssistantModule {
         return ApplicationObject.settings().getNotebookDirectory();
     }
 
+    private void registerMinimizeHandler() {
+        if (dialogLifecycleHandler == null) {
+            dialogLifecycleHandler = new AiUiTheme.DialogLifecycleHandler() {
+                @Override
+                public void onMinimize(final Dialog dialog, final String label) {
+                    onDialogMinimized(dialog, label);
+                }
+
+                @Override
+                public void onDismiss(final Dialog dialog) {
+                    onDialogDismissed(dialog);
+                }
+            };
+        }
+        AiUiTheme.setDialogLifecycleHandler(dialogLifecycleHandler);
+    }
+
+    private void observeLifecycle(final ActivityResultCaller resultCaller) {
+        if (!(resultCaller instanceof LifecycleOwner)) {
+            return;
+        }
+        lifecycleOwner = (LifecycleOwner) resultCaller;
+        lifecycleObserver = (source, event) -> {
+            if (event == Lifecycle.Event.ON_DESTROY) {
+                onDestroyView();
+                if (lifecycleOwner != null && lifecycleObserver != null) {
+                    lifecycleOwner.getLifecycle().removeObserver(lifecycleObserver);
+                    lifecycleOwner = null;
+                    lifecycleObserver = null;
+                }
+            }
+        };
+        lifecycleOwner.getLifecycle().addObserver(lifecycleObserver);
+    }
+
+    private void onDialogMinimized(final Dialog dialog, final String label) {
+        if (dialog == null) {
+            return;
+        }
+        for (int index = minimizedDialogs.size() - 1; index >= 0; index--) {
+            if (minimizedDialogs.get(index).dialog == dialog) {
+                minimizedDialogs.remove(index);
+            }
+        }
+        minimizedDialogs.add(new MinimizedDialog(dialog, label));
+        updateActiveMinimizedDialog();
+        dialog.hide();
+        refreshFloatingButton();
+        final android.content.Context context = getContext();
+        if (context != null) {
+            Toast.makeText(context, "Minimized — tap AI button to resume",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void onDialogDismissed(final Dialog dialog) {
+        boolean removed = false;
+        for (int index = minimizedDialogs.size() - 1; index >= 0; index--) {
+            if (minimizedDialogs.get(index).dialog == dialog) {
+                minimizedDialogs.remove(index);
+                removed = true;
+            }
+        }
+        if (removed) {
+            updateActiveMinimizedDialog();
+            refreshFloatingButton();
+        }
+    }
+
+    private void updateActiveMinimizedDialog() {
+        if (minimizedDialogs.isEmpty()) {
+            activeMinimizedDialog = null;
+            activeMinimizedLabel = null;
+            return;
+        }
+        final MinimizedDialog active = minimizedDialogs.get(minimizedDialogs.size() - 1);
+        activeMinimizedDialog = active.dialog;
+        activeMinimizedLabel = active.label;
+    }
+
+    private boolean resumeMinimizedDialog() {
+        final Dialog dialog = activeMinimizedDialog;
+        if (dialog == null) {
+            return false;
+        }
+        for (int index = minimizedDialogs.size() - 1; index >= 0; index--) {
+            if (minimizedDialogs.get(index).dialog == dialog) {
+                minimizedDialogs.remove(index);
+                break;
+            }
+        }
+        updateActiveMinimizedDialog();
+        refreshFloatingButton();
+        if (getContext() == null) {
+            dialog.dismiss();
+            return true;
+        }
+        dialog.show();
+        return true;
+    }
+
+    private void refreshFloatingButton() {
+        if (floatingButton instanceof TextView) {
+            final TextView button = (TextView) floatingButton;
+            final boolean minimized = activeMinimizedDialog != null;
+            button.setText(minimized ? "AI •" : "AI");
+            button.setTextColor(Color.WHITE);
+            button.setContentDescription(minimized
+                    ? "Resume " + activeMinimizedLabel : "AI Edit");
+            final android.content.Context context = button.getContext();
+            final GradientDrawable background = new GradientDrawable();
+            background.setShape(GradientDrawable.OVAL);
+            background.setColor(AiUiTheme.ACCENT);
+            background.setStroke(dp(context, minimized ? 3 : 2),
+                    minimized ? Color.WHITE : Color.rgb(77, 0, 0));
+            button.setBackground(new RippleDrawable(
+                    ColorStateList.valueOf(AiUiTheme.ACCENT_PRESSED), background, null));
+        }
+        setViewModeVisible(isViewModeVisible);
+    }
+
+    public void onDestroyView() {
+        final List<MinimizedDialog> minimized = new ArrayList<>(minimizedDialogs);
+        minimizedDialogs.clear();
+        activeMinimizedDialog = null;
+        activeMinimizedLabel = null;
+        for (MinimizedDialog item : minimized) {
+            item.dialog.dismiss();
+        }
+        AiUiTheme.clearDialogLifecycleHandler(dialogLifecycleHandler);
+        dialogLifecycleHandler = null;
+        if (floatingButton != null && floatingButton.getParent() instanceof ViewGroup) {
+            ((ViewGroup) floatingButton.getParent()).removeView(floatingButton);
+        }
+        floatingButton = null;
+        activeInstructionInput = null;
+    }
+
     public void attachFloatingButton(final View rootView, final EditText editText, final File currentFile,
             final ScrollCallback scrollCallback, final OpenFileCallback openFileCallback,
             final Runnable onAfterApply) {
@@ -173,6 +340,7 @@ public final class AiAssistantModule {
         if (!(rootView instanceof FrameLayout)) {
             throw new IllegalArgumentException("AI Edit floating button requires a FrameLayout root view.");
         }
+        registerMinimizeHandler();
         if (floatingButton != null && floatingButton.getParent() instanceof ViewGroup) {
             ((ViewGroup) floatingButton.getParent()).removeView(floatingButton);
         }
@@ -192,6 +360,8 @@ public final class AiAssistantModule {
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setGravity(Gravity.CENTER);
         button.setContentDescription("AI Edit");
+        button.setSingleLine(true);
+        button.setMaxLines(1);
         button.setFocusable(true);
         button.setClickable(true);
         final GradientDrawable background = new GradientDrawable();
@@ -209,18 +379,23 @@ public final class AiAssistantModule {
         root.addView(button, params);
         button.setOnClickListener(view -> openEditorDialog(editText));
         floatingButton = button;
-        setViewModeVisible(isViewModeVisible);
+        refreshFloatingButton();
         button.bringToFront();
     }
 
     public void setViewModeVisible(final boolean isViewMode) {
         isViewModeVisible = isViewMode;
         if (floatingButton != null) {
-            floatingButton.setVisibility(isViewMode ? View.VISIBLE : View.GONE);
+            floatingButton.setVisibility(isViewMode || activeMinimizedDialog != null
+                    ? View.VISIBLE : View.GONE);
         }
     }
 
     public void openEditorDialog(final EditText editText) {
+        registerMinimizeHandler();
+        if (resumeMinimizedDialog()) {
+            return;
+        }
         if (getContext() == null || editText == null) {
             return;
         }
@@ -386,7 +561,7 @@ public final class AiAssistantModule {
         allDiffsButton.setOnClickListener(view -> showAllDiffsDialog(context, editText, allDiffsButton));
         syncButton.setOnClickListener(view -> showGitHubSyncDialog(context, editText));
         cancelButton.setOnClickListener(view -> dialog.dismiss());
-        dialog.setOnDismissListener(ignored -> {
+        AiUiTheme.setOnDismissListener(dialog, ignored -> {
             if (activeInstructionInput == instructions) {
                 activeInstructionInput = null;
             }
@@ -676,6 +851,8 @@ public final class AiAssistantModule {
         if (context == null) {
             return;
         }
+        final Dialog dialog = new Dialog(context);
+        AiUiTheme.setOnDismissListener(dialog, null);
         final LinearLayout shell = verticalLayout(context);
         shell.setBackground(AiUiTheme.cardBackground(context));
 
@@ -690,6 +867,12 @@ public final class AiAssistantModule {
         final TextView settingsButton = AiUiTheme.headerAction(context, "⚙");
         settingsButton.setContentDescription("Sync Settings");
         titleRow.addView(settingsButton, new LinearLayout.LayoutParams(dp(context, 40), dp(context, 40)));
+        titleRow.addView(AiUiTheme.minimizeAction(context, dialog, "GitHub Notes Sync"),
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
+        titleRow.addView(AiUiTheme.closeAction(context, dialog, "GitHub Notes Sync"),
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
         header.addView(titleRow);
         final TextView repositoryLine = AiUiTheme.label(context, "", 12);
         repositoryLine.setTextColor(AiUiTheme.ACCENT);
@@ -768,7 +951,6 @@ public final class AiAssistantModule {
         footer.addView(secondaryRow, secondaryParams);
         shell.addView(footer);
 
-        final Dialog dialog = new Dialog(context);
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
         dialog.setContentView(shell);
         dialog.setCanceledOnTouchOutside(true);
@@ -979,7 +1161,7 @@ public final class AiAssistantModule {
         final Dialog confirmation = AiUiTheme.showDialog(
                 context, "Confirm Sync Deletions", body, footer, null);
         final boolean[] resolved = {false};
-        confirmation.setOnDismissListener(ignored -> {
+        AiUiTheme.setOnDismissListener(confirmation, ignored -> {
             if (!resolved[0]) {
                 resolved[0] = true;
                 cancel.run();

@@ -2,6 +2,7 @@ package net.gsantner.markor.ai_assistant;
 
 import android.app.Dialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -18,6 +19,9 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import java.util.WeakHashMap;
 
 public final class AiUiTheme {
     public static final int SURFACE = Color.rgb(13, 13, 16);
@@ -48,19 +52,94 @@ public final class AiUiTheme {
         void onSelected(AiVoiceTeacherHelper.TeacherStyle style);
     }
 
+    public interface DialogLifecycleHandler {
+        void onMinimize(Dialog dialog, String label);
+
+        void onDismiss(Dialog dialog);
+    }
+
+    private static DialogLifecycleHandler dialogLifecycleHandler;
+    private static final WeakHashMap<Dialog, DialogLifecycleHandler> dialogLifecycleHandlers =
+            new WeakHashMap<>();
+
     private AiUiTheme() {
+    }
+
+    public static void setDialogLifecycleHandler(final DialogLifecycleHandler handler) {
+        dialogLifecycleHandler = handler;
+    }
+
+    public static void clearDialogLifecycleHandler(final DialogLifecycleHandler handler) {
+        if (dialogLifecycleHandler == handler) {
+            dialogLifecycleHandler = null;
+        }
+    }
+
+    public static void setOnDismissListener(final Dialog dialog,
+            final DialogInterface.OnDismissListener listener) {
+        final DialogLifecycleHandler handler = lifecycleHandlerFor(dialog);
+        dialog.setOnDismissListener(dismissed -> {
+            if (handler != null) {
+                handler.onDismiss(dialog);
+            }
+            dialogLifecycleHandlers.remove(dialog);
+            if (listener != null) {
+                listener.onDismiss(dismissed);
+            }
+        });
+    }
+
+    public static void minimizeDialog(final Context context, final Dialog dialog,
+            final String label) {
+        if (dialog == null) {
+            return;
+        }
+        final DialogLifecycleHandler handler = lifecycleHandlerFor(dialog);
+        if (handler != null) {
+            handler.onMinimize(dialog, label);
+        } else {
+            dialog.hide();
+            Toast.makeText(context, "Minimized — tap AI button to resume",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    public static TextView minimizeAction(final Context context, final Dialog dialog,
+            final String label) {
+        final TextView action = windowAction(context, "—", "Minimize " + label, ACCENT);
+        action.setOnClickListener(view -> minimizeDialog(context, dialog, label));
+        return action;
+    }
+
+    private static DialogLifecycleHandler lifecycleHandlerFor(final Dialog dialog) {
+        DialogLifecycleHandler handler = dialogLifecycleHandlers.get(dialog);
+        if (handler == null) {
+            handler = dialogLifecycleHandler;
+            if (handler != null) {
+                dialogLifecycleHandlers.put(dialog, handler);
+            }
+        }
+        return handler;
+    }
+
+    public static TextView closeAction(final Context context, final Dialog dialog,
+            final String label) {
+        final TextView action = windowAction(context, "×", "Close " + label, SECONDARY_BORDER);
+        action.setOnClickListener(view -> dialog.dismiss());
+        return action;
     }
 
     public static Dialog showDialog(final Context context, final String title, final View body,
             final View footer, final View headerAction) {
         final Dialog dialog = new Dialog(context);
+        setOnDismissListener(dialog, null);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
         final LinearLayout shell = new LinearLayout(context);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackground(rounded(SURFACE, dp(context, 20), SURFACE_BORDER, dp(context, 1)));
         shell.setClipToOutline(true);
-        shell.addView(createHeader(context, title, headerAction),
+        shell.addView(createHeader(context, title, headerAction, dialog),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -105,13 +184,14 @@ public final class AiUiTheme {
     public static Dialog showCompactDialog(final Context context, final String title,
             final View body, final View footer) {
         final Dialog dialog = new Dialog(context);
+        setOnDismissListener(dialog, null);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
         final LinearLayout shell = new LinearLayout(context);
         shell.setOrientation(LinearLayout.VERTICAL);
         shell.setBackground(rounded(SURFACE, dp(context, 20), SURFACE_BORDER, dp(context, 1)));
         shell.setClipToOutline(true);
-        shell.addView(createHeader(context, title, null),
+        shell.addView(createHeader(context, title, null, null),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
         body.setPadding(dp(context, 16), dp(context, 12), dp(context, 16), dp(context, 12));
@@ -304,7 +384,7 @@ public final class AiUiTheme {
     }
 
     private static LinearLayout createHeader(final Context context, final String title,
-            final View headerAction) {
+            final View headerAction, final Dialog dialog) {
         final LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout row = new LinearLayout(context);
@@ -321,14 +401,50 @@ public final class AiUiTheme {
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         titleParams.setMargins(dp(context, 10), 0, dp(context, 8), 0);
         row.addView(titleView, titleParams);
-        if (headerAction != null) {
-            row.addView(headerAction, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 40)));
+        if (dialog != null) {
+            addHeaderAction(context, row, minimizeAction(context, dialog, title));
+            addHeaderAction(context, row, closeAction(context, dialog, title));
         }
         header.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (headerAction != null) {
+            final HorizontalScrollView actionScroll = new HorizontalScrollView(context);
+            actionScroll.setHorizontalScrollBarEnabled(false);
+            actionScroll.setPadding(dp(context, 16), 0, dp(context, 12), dp(context, 8));
+            actionScroll.addView(headerAction, new HorizontalScrollView.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            header.addView(actionScroll, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
         header.addView(divider(context), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(context, 1)));
         return header;
+    }
+
+    private static TextView windowAction(final Context context, final String text,
+            final String contentDescription, final int borderColor) {
+        final TextView action = label(context, text, 16);
+        action.setTextColor(PRIMARY_TEXT);
+        action.setGravity(Gravity.CENTER);
+        action.setSingleLine(true);
+        action.setMaxLines(1);
+        action.setContentDescription(contentDescription);
+        action.setFocusable(true);
+        action.setClickable(true);
+        action.setMinWidth(dp(context, 36));
+        action.setMinHeight(dp(context, 36));
+        action.setPadding(dp(context, 9), 0, dp(context, 9), 0);
+        action.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(Color.rgb(55, 33, 39)),
+                rounded(SECONDARY, dp(context, 18), borderColor, dp(context, 1)), null));
+        return action;
+    }
+
+    private static void addHeaderAction(final Context context, final LinearLayout row,
+            final View action) {
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36));
+        params.setMargins(dp(context, 5), 0, 0, 0);
+        row.addView(action, params);
     }
 }

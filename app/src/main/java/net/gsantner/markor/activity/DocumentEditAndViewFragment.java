@@ -959,6 +959,16 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
     }
 
     @Override
+    public void onDestroyView() {
+        // >>> AI_ASSISTANT_HOOK_START
+        if (aiAssistantModule != null) {
+            aiAssistantModule.onDestroyView();
+        }
+        // <<< AI_ASSISTANT_HOOK_END
+        super.onDestroyView();
+    }
+
+    @Override
     public void onDestroy() {
         try {
             _webView.loadUrl("about:blank");

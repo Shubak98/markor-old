@@ -105,6 +105,7 @@ public final class AiVoiceTeacherDialog {
         private TextToSpeech tts;
         private boolean ttsReady;
         private boolean playing;
+        private boolean dismissed;
         private boolean hindiVoiceAvailable = true;
         private int currentSentence = -1;
         private int rangeEnd = -1;
@@ -289,6 +290,17 @@ public final class AiVoiceTeacherDialog {
             shell.addView(footer);
 
             dialog = new Dialog(context);
+            final TextView minimizeAction =
+                    AiUiTheme.minimizeAction(context, dialog, "AI Voice Teacher");
+            minimizeAction.setOnClickListener(view -> {
+                pause();
+                AiUiTheme.minimizeDialog(context, dialog, "AI Voice Teacher");
+            });
+            header.addView(minimizeAction, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, AiUiTheme.dp(context, 36)));
+            header.addView(AiUiTheme.closeAction(context, dialog, "AI Voice Teacher"),
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT, AiUiTheme.dp(context, 36)));
             dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             dialog.setContentView(shell);
             dialog.setCanceledOnTouchOutside(true);
@@ -330,7 +342,8 @@ public final class AiVoiceTeacherDialog {
             sendDoubtButton.setOnClickListener(view -> sendDoubt());
             hiChip.setOnClickListener(view -> selectLanguage(true));
             enChip.setOnClickListener(view -> selectLanguage(false));
-            dialog.setOnDismissListener(ignored -> {
+            AiUiTheme.setOnDismissListener(dialog, ignored -> {
+                dismissed = true;
                 playing = false;
                 if (tts != null) {
                     tts.stop();
@@ -351,7 +364,7 @@ public final class AiVoiceTeacherDialog {
                 window.setGravity(Gravity.CENTER);
             }
             tts = new TextToSpeech(context, status -> MAIN_HANDLER.post(() -> {
-                if (!dialog.isShowing()) {
+                if (dismissed) {
                     return;
                 }
                 if (status != TextToSpeech.SUCCESS || tts == null) {
@@ -414,7 +427,7 @@ public final class AiVoiceTeacherDialog {
             styleStatus.setText("Re-explaining…");
             styleStatus.setVisibility(View.VISIBLE);
             styleChangeRequest.reExplain(style, (updatedLesson, error) -> MAIN_HANDLER.post(() -> {
-                if (!dialog.isShowing() || requestSequence != styleRequestSequence) {
+                if (dismissed || requestSequence != styleRequestSequence) {
                     return;
                 }
                 styleStatus.setVisibility(View.GONE);
@@ -661,7 +674,7 @@ public final class AiVoiceTeacherDialog {
             doubtInput.setEnabled(false);
             doubtRequest.send(doubt, section, lesson, teacherStyle,
                     (answer, error) -> MAIN_HANDLER.post(() -> {
-                if (!dialog.isShowing()) {
+                if (dismissed) {
                     return;
                 }
                 sendDoubtButton.setEnabled(true);
