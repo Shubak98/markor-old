@@ -81,7 +81,7 @@ public final class AiAssistantModule {
     public interface TodoEditorBridge {
         String readOpenTodoText();
 
-        void refreshOpenTodo();
+        void refreshOpenTodo(String updatedTodo);
     }
 
     private interface ModelSelectionCallback {
@@ -208,6 +208,9 @@ public final class AiAssistantModule {
                 sessionManager.resume("tasks");
             }
             refreshSessionUi();
+            return;
+        }
+        if (resumeMinimizedDialog()) {
             return;
         }
         final AiSessionManager.SessionEntry main = sessionManager.get("main");
@@ -517,12 +520,19 @@ public final class AiAssistantModule {
                 ColorStateList.valueOf(AiUiTheme.ACCENT_PRESSED), background, null));
         button.setElevation(dp(context, 7));
 
+        final int bottomMargin = isTodoFile(currentFile) ? dp(context, 92) : dp(context, 24);
         final FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 dp(context, 54), dp(context, 54), Gravity.BOTTOM | Gravity.RIGHT);
-        params.setMargins(0, 0, dp(context, 20), dp(context, 24));
+        params.setMargins(0, 0, dp(context, 20), bottomMargin);
         final FrameLayout root = (FrameLayout) rootView;
         root.addView(button, params);
-        button.setOnClickListener(view -> openEditorDialog(editText));
+        button.setOnClickListener(view -> {
+            if (isTodoFile(currentFile)) {
+                openTodoAssistantDialog();
+            } else {
+                openEditorDialog(editText);
+            }
+        });
         floatingButton = button;
         refreshFloatingButton();
         button.bringToFront();
@@ -531,8 +541,8 @@ public final class AiAssistantModule {
     public void setViewModeVisible(final boolean isViewMode) {
         isViewModeVisible = isViewMode;
         if (floatingButton != null) {
-            floatingButton.setVisibility(isViewMode || sessionManager.getMinimizedCount() > 0
-                    ? View.VISIBLE : View.GONE);
+            floatingButton.setVisibility(isViewMode || isTodoFile(attachedDocumentFile)
+                    || sessionManager.getMinimizedCount() > 0 ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -3766,7 +3776,8 @@ public final class AiAssistantModule {
                 onApplied.run();
             }
             if (!isTodoOpenInModule && todoEditorBridge != null) {
-                todoEditorBridge.refreshOpenTodo();
+                final TodoEditorBridge editorBridge = todoEditorBridge;
+                MAIN_HANDLER.post(() -> editorBridge.refreshOpenTodo(updatedText));
             }
         };
         showDiffPreview(targetEditor, sourceText, updatedText, instruction, provider, model,
@@ -3782,6 +3793,11 @@ public final class AiAssistantModule {
         } catch (IOException exception) {
             return first.getAbsoluteFile().equals(second.getAbsoluteFile());
         }
+    }
+
+    private static boolean isTodoFile(final File file) {
+        return ApplicationObject.settings() != null
+                && sameFile(file, ApplicationObject.settings().getTodoFile());
     }
 
     private void showError(final String message) {

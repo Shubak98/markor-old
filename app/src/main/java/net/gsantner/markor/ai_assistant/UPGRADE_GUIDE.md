@@ -148,10 +148,11 @@ The module constructor registers both the voice-recognition launcher and the Gal
 
 ## Pin / Unpin browser hooks
 
-Copy `AiPinnedStore.java` and its unit test with the `ai_assistant/` package. The
-store uses the existing `markor_ai_assistant_prefs` preferences file and stores
-canonical paths in newest-first order. The virtual folder is only a reserved
-`File` path; no directory is created, so GitHub Sync never sees a Pinned folder.
+Copy `AiPinnedStore.java` and its unit test with the `ai_assistant/` package.
+The store syncs notebook-relative paths in `ai_pinned.json` at the notebook
+root, with one-time migration from `pinned_paths` and SharedPreferences fallback
+for paths outside the notebook. The virtual folder is only a reserved `File`
+path; no directory is created, so GitHub Sync never sees a Pinned folder.
 
 This checkout calls the browser classes `GsFileBrowserListAdapter.java` and
 `GsFileBrowserFragment.java` (not `FilesystemViewerAdapter` or
@@ -230,6 +231,18 @@ In `MainActivity.java`, use the existing `AI_ASSISTANT_HOOK` blocks:
   `MENU_AI_TASKS` and `MenuItem.SHOW_AS_ACTION_NEVER`.
 * Keep the `"📋 Tasks"` chip in the Main AI Hub wired to the same module entry
   point. No layout, XML, manifest, or Gradle changes are needed.
+
+The built-in To-Do tab is a `DocumentEditAndViewFragment` opened on
+`AppSettings.getTodoFile()`. Its crimson `AI` button opens AI Tasks directly,
+raised above the main-screen add FAB area; other document buttons keep opening
+the general editor assistant. The button stays visible in edit and preview
+modes. A minimized AI Tasks session is resumed first; otherwise, the most
+recently minimized session is resumed before opening a new AI Tasks dialog.
+Keep `DocumentEditAndViewFragment.applyTodoText()` and the `MainActivity` todo
+bridge inside their marked hooks: after Apply they replace the open editor text
+on the UI thread, save it, and refresh the preview when visible. These paths
+cover Edit Tasks, Shift Overdue, and Diff Preview Apply without XML or manifest
+changes.
 
 The Tasks dialog has `AI Command & Plan` and `Tasks & Reminders` tabs. Its
 `Today's Study Plan` action and `Edit Tasks`/`Task Chat` modes share the

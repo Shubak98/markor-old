@@ -978,6 +978,18 @@ public class DocumentEditAndViewFragment extends MarkorBaseFragment implements F
         super.onDestroy();
     }
 
+    // >>> AI_ASSISTANT_HOOK_START
+    public void applyTodoText(final String updatedTodo) {
+        if (updatedTodo == null || _hlEditor == null) {
+            return;
+        }
+        _hlEditor.getText().replace(0, _hlEditor.length(), updatedTodo);
+        if (saveDocument(false) && _isPreviewVisible) {
+            updateViewModeText();
+        }
+    }
+    // <<< AI_ASSISTANT_HOOK_END
+
     public Document getDocument() {
         return _document;
     }

@@ -243,19 +243,28 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
             _aiAssistantModule.setTodoEditorBridge(new AiAssistantModule.TodoEditorBridge() {
                 @Override
                 public String readOpenTodoText() {
-                    if (_todo == null || _todo.getView() == null || _todo.getDocument() == null
-                            || !_todo.getDocument().file.getAbsoluteFile()
-                                    .equals(_appSettings.getTodoFile().getAbsoluteFile())) {
+                    if (_todo == null || _todo.getView() == null || _todo.getDocument() == null) {
+                        return null;
+                    }
+                    try {
+                        if (!_todo.getDocument().file.getCanonicalFile()
+                                .equals(_appSettings.getTodoFile().getCanonicalFile())) {
+                            return null;
+                        }
+                    } catch (IOException exception) {
                         return null;
                     }
                     return _todo.getTextString();
                 }
 
                 @Override
-                public void refreshOpenTodo() {
-                    if (readOpenTodoText() != null) {
-                        _todo.getDocument().resetChangeTracking();
-                        _todo.loadDocument();
+                public void refreshOpenTodo(final String updatedTodo) {
+                    if (updatedTodo != null && readOpenTodoText() != null) {
+                        runOnUiThread(() -> {
+                            if (_todo != null && _todo.getView() != null) {
+                                _todo.applyTodoText(updatedTodo);
+                            }
+                        });
                     }
                 }
             });
