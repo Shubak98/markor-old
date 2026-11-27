@@ -78,6 +78,12 @@ public final class AiAssistantModule {
         void open(File file);
     }
 
+    public interface TodoEditorBridge {
+        String readOpenTodoText();
+
+        void refreshOpenTodo();
+    }
+
     private interface ModelSelectionCallback {
         void onSelected(String model);
     }
@@ -88,6 +94,14 @@ public final class AiAssistantModule {
 
     private interface SettingsImportCallback {
         void onSelected(String jsonText);
+    }
+
+    private interface PreviewGuard {
+        void validate() throws IOException;
+    }
+
+    private interface PreviewApplyCallback {
+        void apply() throws IOException;
     }
 
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
@@ -112,8 +126,11 @@ public final class AiAssistantModule {
     private Runnable onAfterApply = () -> { };
     private boolean isViewModeVisible;
     private File currentFile;
+    private File attachedDocumentFile;
+    private EditText activeDocumentEditor;
     private ScrollCallback scrollCallback;
     private OpenFileCallback openFileCallback;
+    private TodoEditorBridge todoEditorBridge;
     private ImageResultCallback pendingImageCallback;
     private SettingsImportCallback pendingSettingsImportCallback;
 
@@ -173,6 +190,95 @@ public final class AiAssistantModule {
         registerMinimizeHandler();
         currentFile = null;
         showGitHubSyncDialog(getContext(), null);
+    }
+
+    public void openTodoAssistantDialog() {
+        registerMinimizeHandler();
+        final android.content.Context context = getContext();
+        if (context == null) {
+            return;
+        }
+        final AiSessionManager.SessionEntry existing = sessionManager.get("tasks");
+        if (existing != null && existing.getDialog() != null) {
+            final AiSessionManager.SessionEntry main = sessionManager.get("main");
+            if (main != null && main.getDialog() != null && main.getDialog().isShowing()) {
+                sessionManager.minimize("main");
+            }
+            if (!existing.getDialog().isShowing()) {
+                sessionManager.resume("tasks");
+            }
+            refreshSessionUi();
+            return;
+        }
+        final AiSessionManager.SessionEntry main = sessionManager.get("main");
+        if (main != null && main.getDialog() != null && main.getDialog().isShowing()) {
+            sessionManager.minimize("main");
+        }
+        AiTodoAssistantDialog.show(context, settingsStore, new AiTodoAssistantDialog.Host() {
+            @Override
+            public File getTodoFile() {
+                return ApplicationObject.settings().getTodoFile();
+            }
+
+            @Override
+            public File getNotebookRoot() {
+                return ApplicationObject.settings().getNotebookDirectory();
+            }
+
+            @Override
+            public File getCurrentFile() {
+                return currentFile;
+            }
+
+            @Override
+            public String readTodoText() throws IOException {
+                final File todoFile = getTodoFile();
+                if (activeDocumentEditor != null && sameFile(attachedDocumentFile, todoFile)) {
+                    return activeDocumentEditor.getText().toString();
+                }
+                if (todoEditorBridge != null) {
+                    final String openText = todoEditorBridge.readOpenTodoText();
+                    if (openText != null) {
+                        return openText;
+                    }
+                }
+                return AiTodoAssistantHelper.readTodoFile(todoFile);
+            }
+
+            @Override
+            public String readTodoDiskText() throws IOException {
+                return AiTodoAssistantHelper.readTodoFile(getTodoFile());
+            }
+
+            @Override
+            public void previewTodoChanges(final String sourceText, final String diskSnapshot,
+                    final String updatedText, final String instruction, final String provider,
+                    final String model, final Runnable onApplied) {
+                previewTodoFileChanges(sourceText, diskSnapshot, updatedText,
+                        instruction, provider, model, onApplied);
+            }
+
+            @Override
+            public void openFile(final File file) {
+                if (openFileCallback == null) {
+                    Toast.makeText(context, "Markor cannot open a linked note from this screen.",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                openFileCallback.open(file);
+            }
+
+            @Override
+            public void startVoiceInput(final EditText input) {
+                activeInstructionInput = input;
+                AiAssistantModule.this.startVoiceInput();
+            }
+        });
+        refreshSessionUi();
+    }
+
+    public void setTodoEditorBridge(final TodoEditorBridge bridge) {
+        todoEditorBridge = bridge;
     }
 
     private android.content.Context getContext() {
@@ -239,6 +345,8 @@ public final class AiAssistantModule {
             return "sync";
         } else if ("All Diffs".equals(label)) {
             return "all_diffs";
+        } else if ("AI Tasks".equals(label)) {
+            return "tasks";
         }
         return null;
     }
@@ -349,6 +457,9 @@ public final class AiAssistantModule {
         }
         floatingButton = null;
         activeInstructionInput = null;
+        activeDocumentEditor = null;
+        attachedDocumentFile = null;
+        todoEditorBridge = null;
         activeSessionsStrip = null;
         activeModeChips = null;
     }
@@ -377,6 +488,8 @@ public final class AiAssistantModule {
             ((ViewGroup) floatingButton.getParent()).removeView(floatingButton);
         }
         this.currentFile = currentFile;
+        this.attachedDocumentFile = currentFile;
+        this.activeDocumentEditor = editText;
         this.scrollCallback = scrollCallback;
         this.openFileCallback = openFileCallback;
         this.onAfterApply = onAfterApply == null ? () -> { } : onAfterApply;
@@ -609,7 +722,6 @@ public final class AiAssistantModule {
             for (int index = 0; index < modeChips.length; index++) {
                 AiUiTheme.styleChip(modeChips[index], index == 0);
             }
-            sessionManager.close("main");
             refreshSessionUi();
         });
         vaultButton.setOnClickListener(view -> showMnemonicsVault(context));
@@ -815,7 +927,7 @@ public final class AiAssistantModule {
                 {"study", "Ask / Study"},
                 {"jump", "Jump"}, {"folder", "Folder"}, {"new_note", "New Note"},
                 {"tutor", "Tutor Chat"}, {"quiz", "MCQ Quiz"},
-                {"anki", "Anki CSV"}, {"diagram", "Diagram"}
+                {"anki", "Anki CSV"}, {"diagram", "Diagram"}, {"tasks", "📋 Tasks"}
         };
         final HorizontalScrollView horizontalScroll = new HorizontalScrollView(context);
         horizontalScroll.setHorizontalScrollBarEnabled(false);
@@ -849,6 +961,11 @@ public final class AiAssistantModule {
                     }
                     sessionManager.resume(toolKey);
                     refreshSessionUi();
+                    return;
+                }
+                if ("tasks".equals(chipMode)) {
+                    minimizeSession("main");
+                    openTodoAssistantDialog();
                     return;
                 }
                 if (!hasCurrentFile && requiresCurrentFile) {
@@ -898,6 +1015,8 @@ public final class AiAssistantModule {
                 return "quiz";
             case "anki":
                 return "anki";
+            case "tasks":
+                return "tasks";
             default:
                 return null;
         }
@@ -915,6 +1034,8 @@ public final class AiAssistantModule {
                 return "MCQ Quiz";
             case "anki":
                 return "Anki CSV";
+            case "tasks":
+                return "📋 Tasks";
             default:
                 return null;
         }
@@ -3453,6 +3574,16 @@ public final class AiAssistantModule {
             final String instruction, final String provider, final String model,
             final Runnable onApplied, final MarkdownSectionParser.Section scopedSection,
             final String updatedSection) {
+        showDiffPreview(editText, original, updated, instruction, provider, model,
+                onApplied, scopedSection, updatedSection, currentFile, null, null, true);
+    }
+
+    private void showDiffPreview(final EditText editText, final String original, final String updated,
+            final String instruction, final String provider, final String model,
+            final Runnable onApplied, final MarkdownSectionParser.Section scopedSection,
+            final String updatedSection, final File historyFile,
+            final PreviewGuard previewGuard, final PreviewApplyCallback previewApplyCallback,
+            final boolean runDefaultAfterApply) {
         final android.content.Context context = getContext();
         if (context == null) {
             return;
@@ -3547,15 +3678,34 @@ public final class AiAssistantModule {
                 return;
             }
             try {
+                if (previewGuard != null) {
+                    previewGuard.validate();
+                }
+            } catch (IOException exception) {
+                showError(exception.getMessage());
+                return;
+            }
+            try {
                 diffHistoryStore.addEntry(
-                        currentFile, instruction, provider, model, beforeApplying, currentUpdated[0]);
+                        historyFile, instruction, provider, model, beforeApplying, currentUpdated[0]);
             } catch (IOException exception) {
                 showError("Could not save this edit to history: " + exception.getMessage());
                 return;
             }
             editText.getText().replace(0, editText.getText().length(), currentUpdated[0]);
+            if (previewApplyCallback != null) {
+                try {
+                    previewApplyCallback.apply();
+                } catch (IOException exception) {
+                    editText.getText().replace(0, editText.getText().length(), beforeApplying);
+                    showError("Could not apply the todo.txt changes: " + exception.getMessage());
+                    return;
+                }
+            }
             dialog.dismiss();
-            onAfterApply.run();
+            if (runDefaultAfterApply) {
+                onAfterApply.run();
+            }
             if (onApplied != null) {
                 onApplied.run();
             }
@@ -3574,6 +3724,64 @@ public final class AiAssistantModule {
                     SimpleLineDiff.buildCompactDiffLines(original, currentUpdated[0], 2);
             renderDiffPreview(context, preview, currentUpdated[0], true, refreshedDiff);
         });
+    }
+
+    private void previewTodoFileChanges(final String sourceText, final String diskSnapshot,
+            final String updatedText, final String instruction, final String provider,
+            final String model, final Runnable onApplied) {
+        final android.content.Context context = getContext();
+        if (context == null) {
+            return;
+        }
+        final File todoFile = ApplicationObject.settings().getTodoFile();
+        final boolean isTodoOpenInModule = activeDocumentEditor != null
+                && sameFile(attachedDocumentFile, todoFile);
+        final EditText targetEditor = isTodoOpenInModule ? activeDocumentEditor : new EditText(context);
+        if (isTodoOpenInModule && !sourceText.equals(targetEditor.getText().toString())) {
+            showError("todo.txt changed while the AI edit was being prepared. Run it again.");
+            return;
+        }
+        if (!isTodoOpenInModule) {
+            targetEditor.setText(sourceText);
+        }
+        final PreviewGuard guard = () -> {
+            final String currentDiskText = AiTodoAssistantHelper.readTodoFile(todoFile);
+            if (!diskSnapshot.equals(currentDiskText)) {
+                throw new IOException("todo.txt changed after this diff was prepared. Run the assistant again.");
+            }
+            if (isTodoOpenInModule && !sourceText.equals(activeDocumentEditor.getText().toString())) {
+                throw new IOException("The open todo.txt changed after this diff was prepared.");
+            }
+            if (!isTodoOpenInModule && todoEditorBridge != null) {
+                final String openText = todoEditorBridge.readOpenTodoText();
+                if (openText != null && !sourceText.equals(openText)) {
+                    throw new IOException("The open todo.txt changed after this diff was prepared.");
+                }
+            }
+        };
+        final PreviewApplyCallback apply = () ->
+                AiTodoAssistantHelper.writeTodoFile(todoFile, updatedText);
+        final Runnable refresh = () -> {
+            if (onApplied != null) {
+                onApplied.run();
+            }
+            if (!isTodoOpenInModule && todoEditorBridge != null) {
+                todoEditorBridge.refreshOpenTodo();
+            }
+        };
+        showDiffPreview(targetEditor, sourceText, updatedText, instruction, provider, model,
+                refresh, null, null, todoFile, guard, apply, isTodoOpenInModule);
+    }
+
+    private static boolean sameFile(final File first, final File second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        try {
+            return first.getCanonicalFile().equals(second.getCanonicalFile());
+        } catch (IOException exception) {
+            return first.getAbsoluteFile().equals(second.getAbsoluteFile());
+        }
     }
 
     private void showError(final String message) {

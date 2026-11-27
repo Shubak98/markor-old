@@ -16,8 +16,9 @@ _aiAssistantModule = new AiAssistantModule(this, this,
         file -> DocumentActivity.launch(MainActivity.this, file, false, null));
 ```
 
-Add these exact marked blocks to `onOptionsItemSelected` and `onCreateOptionsMenu`.
-The IDs are activity constants (`Menu.FIRST + 40` and `Menu.FIRST + 41`):
+Add the AI Tasks ID (`Menu.FIRST + 42`) inside the marked hook beside the two
+existing IDs. Add these marked blocks to `onOptionsItemSelected` and
+`onCreateOptionsMenu`:
 
 ```java
 // >>> AI_ASSISTANT_HOOK_START
@@ -27,6 +28,10 @@ if (item.getItemId() == MENU_AI_ASSISTANT) {
 }
 if (item.getItemId() == MENU_GITHUB_SYNC) {
     _aiAssistantModule.openGitHubSyncDialog();
+    return true;
+}
+if (item.getItemId() == MENU_AI_TASKS) {
+    _aiAssistantModule.openTodoAssistantDialog();
     return true;
 }
 // <<< AI_ASSISTANT_HOOK_END
@@ -40,6 +45,9 @@ aiAssistantItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
 final MenuItem githubSyncItem =
         menu.add(Menu.NONE, MENU_GITHUB_SYNC, Menu.NONE, "☁ GitHub Sync");
 githubSyncItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+final MenuItem aiTasksItem =
+        menu.add(Menu.NONE, MENU_AI_TASKS, Menu.NONE, "📋 AI Tasks");
+aiTasksItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
 // <<< AI_ASSISTANT_HOOK_END
 ```
 
@@ -190,3 +198,43 @@ This checkout calls the browser classes `GsFileBrowserListAdapter.java` and
 The inserted browser code is delimited by
 `// >>> AI_ASSISTANT_HOOK_START` and `// <<< AI_ASSISTANT_HOOK_END`. Preserve
 those markers and avoid creating the sentinel path on disk.
+
+## AI Tasks (`todo.txt`) assistant
+
+Copy `AiTodoAssistantHelper.java` and `AiTodoAssistantDialog.java` together
+with their unit test under `app/src/test/java/net/gsantner/markor/ai_assistant/`.
+The helper reads Markor's configured `AppSettings.get().getTodoFile()`,
+parses todo.txt priority, completion, `due:YYYY-MM-DD`, and `ref:` fields,
+and validates linked Markdown paths against the canonical Notebook root.
+Date filters and prompts use the device's local date; prompts include the
+English weekday and the shared Default English Output Rule.
+
+In `AiAssistantModule.java`, keep the `tasks` session key mapping for the
+`AI Tasks` dialog label, the `openTodoAssistantDialog()` entry point, and the
+`previewTodoFileChanges()` path. Task edits and overdue-date shifts use the
+existing compact Diff Preview, verify that the source file has not changed,
+write only after Apply, and refresh a currently open todo editor.
+`AiTodoAssistantDialog` uses `AiProviderRouter`, so the configured 429/413
+provider failover behavior remains centralized in the router. `AiUiTheme.java`
+recognizes `AI Tasks` as a session tool, supplying the standard `⇄ Tools` and
+minimize actions.
+
+In `MainActivity.java`, use the existing `AI_ASSISTANT_HOOK` blocks:
+
+* Add `MENU_AI_TASKS = Menu.FIRST + 42` beside the AI Assistant and GitHub Sync
+  IDs.
+* In `onOptionsItemSelected()`, handle `MENU_AI_TASKS` by calling
+  `_aiAssistantModule.openTodoAssistantDialog()`; the menu action also supplies
+  a bridge to read and refresh the Todo tab when `todo.txt` is already open.
+* In `onCreateOptionsMenu()`, add one `"📋 AI Tasks"` item with ID
+  `MENU_AI_TASKS` and `MenuItem.SHOW_AS_ACTION_NEVER`.
+* Keep the `"📋 Tasks"` chip in the Main AI Hub wired to the same module entry
+  point. No layout, XML, manifest, or Gradle changes are needed.
+
+The Tasks dialog has `AI Command & Plan` and `Tasks & Reminders` tabs. Its
+`Today's Study Plan` action and `Edit Tasks`/`Task Chat` modes share the
+todo parser; only edit and overdue-shift actions open a diff for explicit safe
+application. Note references are stored as relative `ref:` tags, and opening a
+linked note requires an existing `.md` file that resolves inside the Notebook.
+Calendar and Clock reminders use native insert/set-alarm intents and require no
+manifest permission additions.

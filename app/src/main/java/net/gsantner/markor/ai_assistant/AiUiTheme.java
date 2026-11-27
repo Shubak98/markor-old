@@ -556,7 +556,8 @@ public final class AiUiTheme {
                 || "Mnemonic Preview".equals(label) || "Mnemonic Generator".equals(label)
                 || "MCQ Quiz".equals(label) || "Anki CSV Preview".equals(label)
                 || "Diff Preview".equals(label) || "AI Answer".equals(label)
-                || "GitHub Notes Sync".equals(label) || "All Diffs".equals(label);
+                || "GitHub Notes Sync".equals(label) || "All Diffs".equals(label)
+                || "AI Tasks".equals(label);
     }
 
     private static TextView windowAction(final Context context, final String text,

@@ -59,6 +59,9 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
     public static boolean IS_DEBUG_ENABLED = false;
     private static final int MENU_AI_ASSISTANT = Menu.FIRST + 40;
     private static final int MENU_GITHUB_SYNC = Menu.FIRST + 41;
+    // >>> AI_ASSISTANT_HOOK_START
+    private static final int MENU_AI_TASKS = Menu.FIRST + 42;
+    // <<< AI_ASSISTANT_HOOK_END
 
     private BottomNavigationView _bottomNav;
     private ViewPager2 _viewPager;
@@ -236,8 +239,31 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
             return true;
         }
         // >>> AI_ASSISTANT_HOOK_START
-        if (item.getItemId() == MENU_AI_ASSISTANT) {
-            _aiAssistantModule.openMainAssistantDialog();
+        if (item.getItemId() == MENU_AI_ASSISTANT || item.getItemId() == MENU_AI_TASKS) {
+            _aiAssistantModule.setTodoEditorBridge(new AiAssistantModule.TodoEditorBridge() {
+                @Override
+                public String readOpenTodoText() {
+                    if (_todo == null || _todo.getView() == null || _todo.getDocument() == null
+                            || !_todo.getDocument().file.getAbsoluteFile()
+                                    .equals(_appSettings.getTodoFile().getAbsoluteFile())) {
+                        return null;
+                    }
+                    return _todo.getTextString();
+                }
+
+                @Override
+                public void refreshOpenTodo() {
+                    if (readOpenTodoText() != null) {
+                        _todo.getDocument().resetChangeTracking();
+                        _todo.loadDocument();
+                    }
+                }
+            });
+            if (item.getItemId() == MENU_AI_ASSISTANT) {
+                _aiAssistantModule.openMainAssistantDialog();
+            } else {
+                _aiAssistantModule.openTodoAssistantDialog();
+            }
             return true;
         }
         if (item.getItemId() == MENU_GITHUB_SYNC) {
@@ -260,6 +286,9 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
         final MenuItem githubSyncItem =
                 menu.add(Menu.NONE, MENU_GITHUB_SYNC, Menu.NONE, "☁ GitHub Sync");
         githubSyncItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+        final MenuItem aiTasksItem =
+                menu.add(Menu.NONE, MENU_AI_TASKS, Menu.NONE, "📋 AI Tasks");
+        aiTasksItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
         // <<< AI_ASSISTANT_HOOK_END
 
         _cu.tintMenuItems(menu, true, Color.WHITE);
