@@ -101,14 +101,14 @@ public final class AiAssistantModule {
     private final AiSettingsStore settingsStore;
     private final AiDiffHistoryStore diffHistoryStore;
     private final AiMnemonicsStore mnemonicsStore;
+    private final AiSessionManager sessionManager = new AiSessionManager();
     private AiUiTheme.DialogLifecycleHandler dialogLifecycleHandler;
     private LifecycleOwner lifecycleOwner;
     private LifecycleEventObserver lifecycleObserver;
-    private final List<MinimizedDialog> minimizedDialogs = new ArrayList<>();
     private EditText activeInstructionInput;
     private View floatingButton;
-    private Dialog activeMinimizedDialog;
-    private String activeMinimizedLabel;
+    private LinearLayout activeSessionsStrip;
+    private TextView[] activeModeChips;
     private Runnable onAfterApply = () -> { };
     private boolean isViewModeVisible;
     private File currentFile;
@@ -116,16 +116,6 @@ public final class AiAssistantModule {
     private OpenFileCallback openFileCallback;
     private ImageResultCallback pendingImageCallback;
     private SettingsImportCallback pendingSettingsImportCallback;
-
-    private static final class MinimizedDialog {
-        private final Dialog dialog;
-        private final String label;
-
-        private MinimizedDialog(final Dialog dialog, final String label) {
-            this.dialog = dialog;
-            this.label = label;
-        }
-    }
 
     public AiAssistantModule(final Fragment fragment) {
         this.fragment = fragment;
@@ -197,6 +187,15 @@ public final class AiAssistantModule {
         if (dialogLifecycleHandler == null) {
             dialogLifecycleHandler = new AiUiTheme.DialogLifecycleHandler() {
                 @Override
+                public void onCreate(final Dialog dialog, final String label) {
+                    final String toolKey = toolKeyForLabel(label);
+                    if (toolKey != null) {
+                        sessionManager.register(toolKey, label, dialog, null);
+                        refreshSessionUi();
+                    }
+                }
+
+                @Override
                 public void onMinimize(final Dialog dialog, final String label) {
                     onDialogMinimized(dialog, label);
                 }
@@ -205,9 +204,43 @@ public final class AiAssistantModule {
                 public void onDismiss(final Dialog dialog) {
                     onDialogDismissed(dialog);
                 }
+
+                @Override
+                public void onSwitchToTools(final Dialog dialog, final String label) {
+                    onSwitchToTools(dialog);
+                }
             };
         }
         AiUiTheme.setDialogLifecycleHandler(dialogLifecycleHandler);
+    }
+
+    private static String toolKeyForLabel(final String label) {
+        if ("AI Assistant".equals(label)) {
+            return "main";
+        } else if ("AI Voice Teacher".equals(label)) {
+            return "teacher";
+        } else if ("Mnemonics".equals(label)) {
+            return "mnemonics";
+        } else if ("Mnemonic Preview".equals(label)) {
+            return "mnemonics";
+        } else if ("Mnemonic Generator".equals(label)) {
+            return "mnemonics";
+        } else if ("Tutor Chat".equals(label)) {
+            return "chat";
+        } else if ("MCQ Quiz".equals(label)) {
+            return "quiz";
+        } else if ("Anki CSV Preview".equals(label)) {
+            return "anki";
+        } else if ("Diff Preview".equals(label)) {
+            return "diff";
+        } else if ("AI Answer".equals(label)) {
+            return "answer";
+        } else if ("GitHub Notes Sync".equals(label)) {
+            return "sync";
+        } else if ("All Diffs".equals(label)) {
+            return "all_diffs";
+        }
+        return null;
     }
 
     private void observeLifecycle(final ActivityResultCaller resultCaller) {
@@ -229,18 +262,10 @@ public final class AiAssistantModule {
     }
 
     private void onDialogMinimized(final Dialog dialog, final String label) {
-        if (dialog == null) {
+        if (dialog == null || !sessionManager.minimize(dialog)) {
             return;
         }
-        for (int index = minimizedDialogs.size() - 1; index >= 0; index--) {
-            if (minimizedDialogs.get(index).dialog == dialog) {
-                minimizedDialogs.remove(index);
-            }
-        }
-        minimizedDialogs.add(new MinimizedDialog(dialog, label));
-        updateActiveMinimizedDialog();
-        dialog.hide();
-        refreshFloatingButton();
+        refreshSessionUi();
         final android.content.Context context = getContext();
         if (context != null) {
             Toast.makeText(context, "Minimized — tap AI button to resume",
@@ -249,59 +274,60 @@ public final class AiAssistantModule {
     }
 
     private void onDialogDismissed(final Dialog dialog) {
-        boolean removed = false;
-        for (int index = minimizedDialogs.size() - 1; index >= 0; index--) {
-            if (minimizedDialogs.get(index).dialog == dialog) {
-                minimizedDialogs.remove(index);
-                removed = true;
-            }
-        }
-        if (removed) {
-            updateActiveMinimizedDialog();
-            refreshFloatingButton();
-        }
+        sessionManager.forget(dialog);
+        refreshSessionUi();
     }
 
-    private void updateActiveMinimizedDialog() {
-        if (minimizedDialogs.isEmpty()) {
-            activeMinimizedDialog = null;
-            activeMinimizedLabel = null;
-            return;
+    private void minimizeSession(final String toolKey) {
+        if (sessionManager.minimize(toolKey)) {
+            refreshSessionUi();
         }
-        final MinimizedDialog active = minimizedDialogs.get(minimizedDialogs.size() - 1);
-        activeMinimizedDialog = active.dialog;
-        activeMinimizedLabel = active.label;
     }
 
     private boolean resumeMinimizedDialog() {
-        final Dialog dialog = activeMinimizedDialog;
-        if (dialog == null) {
+        final AiSessionManager.SessionEntry active = sessionManager.getMostRecentlyMinimized();
+        if (active == null) {
             return false;
         }
-        for (int index = minimizedDialogs.size() - 1; index >= 0; index--) {
-            if (minimizedDialogs.get(index).dialog == dialog) {
-                minimizedDialogs.remove(index);
-                break;
-            }
-        }
-        updateActiveMinimizedDialog();
-        refreshFloatingButton();
         if (getContext() == null) {
-            dialog.dismiss();
+            sessionManager.close(active.getToolKey());
+            refreshSessionUi();
             return true;
         }
-        dialog.show();
+        sessionManager.resume(active.getToolKey());
+        refreshSessionUi();
         return true;
+    }
+
+    private void onSwitchToTools(final Dialog dialog) {
+        final String toolKey = sessionManager.getToolKey(dialog);
+        if (toolKey != null) {
+            sessionManager.minimize(toolKey);
+        }
+        final AiSessionManager.SessionEntry main = sessionManager.get("main");
+        if (main != null && main.getDialog() != null) {
+            sessionManager.resume("main");
+            refreshSessionUi();
+            return;
+        }
+        final EditText editor = activeInstructionInput;
+        final android.content.Context context = getContext();
+        if (context != null) {
+            openEditorDialog(editor == null ? new EditText(context) : editor, false);
+        }
+        refreshSessionUi();
     }
 
     private void refreshFloatingButton() {
         if (floatingButton instanceof TextView) {
             final TextView button = (TextView) floatingButton;
-            final boolean minimized = activeMinimizedDialog != null;
-            button.setText(minimized ? "AI •" : "AI");
+            final int minimizedCount = sessionManager.getMinimizedCount();
+            final boolean minimized = minimizedCount > 0;
+            button.setText(minimized ? "AI •" + minimizedCount : "AI");
             button.setTextColor(Color.WHITE);
             button.setContentDescription(minimized
-                    ? "Resume " + activeMinimizedLabel : "AI Edit");
+                    ? "Resume most recently minimized AI tool, " + minimizedCount
+                            + " minimized sessions" : "AI Edit");
             final android.content.Context context = button.getContext();
             final GradientDrawable background = new GradientDrawable();
             background.setShape(GradientDrawable.OVAL);
@@ -315,7 +341,7 @@ public final class AiAssistantModule {
     }
 
     public void onDestroyView() {
-        clearMinimizedDialogs();
+        sessionManager.releaseAll();
         AiUiTheme.clearDialogLifecycleHandler(dialogLifecycleHandler);
         dialogLifecycleHandler = null;
         if (floatingButton != null && floatingButton.getParent() instanceof ViewGroup) {
@@ -323,17 +349,18 @@ public final class AiAssistantModule {
         }
         floatingButton = null;
         activeInstructionInput = null;
+        activeSessionsStrip = null;
+        activeModeChips = null;
     }
 
-    private void clearMinimizedDialogs() {
-        final List<MinimizedDialog> minimized = new ArrayList<>(minimizedDialogs);
-        minimizedDialogs.clear();
-        activeMinimizedDialog = null;
-        activeMinimizedLabel = null;
-        for (MinimizedDialog item : minimized) {
-            item.dialog.dismiss();
-        }
+    public void release() {
+        onDestroyView();
+    }
+
+    private void refreshSessionUi() {
         refreshFloatingButton();
+        updateActiveModeMarkers();
+        updateActiveSessionsStrip();
     }
 
     public void attachFloatingButton(final View rootView, final EditText editText, final File currentFile,
@@ -391,14 +418,18 @@ public final class AiAssistantModule {
     public void setViewModeVisible(final boolean isViewMode) {
         isViewModeVisible = isViewMode;
         if (floatingButton != null) {
-            floatingButton.setVisibility(isViewMode || activeMinimizedDialog != null
+            floatingButton.setVisibility(isViewMode || sessionManager.getMinimizedCount() > 0
                     ? View.VISIBLE : View.GONE);
         }
     }
 
     public void openEditorDialog(final EditText editText) {
+        openEditorDialog(editText, true);
+    }
+
+    private void openEditorDialog(final EditText editText, final boolean resumeMinimized) {
         registerMinimizeHandler();
-        if (resumeMinimizedDialog()) {
+        if (resumeMinimized && resumeMinimizedDialog()) {
             return;
         }
         if (getContext() == null || editText == null) {
@@ -576,13 +607,13 @@ public final class AiAssistantModule {
             for (int index = 0; index < modeChips.length; index++) {
                 AiUiTheme.styleChip(modeChips[index], index == 0);
             }
-            clearMinimizedDialogs();
-            dialog.dismiss();
+            sessionManager.close("main");
+            refreshSessionUi();
         });
         vaultButton.setOnClickListener(view -> showMnemonicsVault(context));
         allDiffsButton.setOnClickListener(view -> showAllDiffsDialog(context, editText, allDiffsButton));
         syncButton.setOnClickListener(view -> showGitHubSyncDialog(context, editText));
-        cancelButton.setOnClickListener(view -> dialog.dismiss());
+        cancelButton.setOnClickListener(view -> sessionManager.close("main"));
         AiUiTheme.setOnDismissListener(dialog, ignored -> {
             if (activeInstructionInput == instructions) {
                 activeInstructionInput = null;
@@ -605,17 +636,17 @@ public final class AiAssistantModule {
             final String sourceMarkdown = scopedSection == null
                     ? originalMarkdown : scopedSection.getContent();
             if ("teacher".equals(requestedMode)) {
-                dialog.dismiss();
+                minimizeSession("main");
                 selectTeacherSource(editText, originalMarkdown, scopedSection);
                 return;
             }
             if ("mnemonics".equals(requestedMode)) {
-                dialog.dismiss();
+                minimizeSession("main");
                 showMnemonicsDialog(editText, originalMarkdown, scopedSection);
                 return;
             }
             if ("tutor".equals(requestedMode)) {
-                dialog.dismiss();
+                minimizeSession("main");
                 showTutorChat(editText, sourceMarkdown, attachedImage[0], scopedSection);
                 return;
             }
@@ -769,7 +800,7 @@ public final class AiAssistantModule {
         }
     }
 
-    private static TextView[] addModeChips(final android.content.Context context,
+    private TextView[] addModeChips(final android.content.Context context,
             final LinearLayout parent,
             final String[] selectedMode, final boolean hasCurrentFile) {
         final String[][] modes = {
@@ -789,6 +820,7 @@ public final class AiAssistantModule {
             final TextView chip = new TextView(context);
             chips[modeIndex] = chip;
             chip.setText(mode[1]);
+            chip.setTag(mode[0]);
             chip.setTextSize(13);
             chip.setGravity(Gravity.CENTER);
             AiUiTheme.styleChip(chip, modeIndex == 0);
@@ -803,6 +835,15 @@ public final class AiAssistantModule {
                 chip.setContentDescription(mode[1] + ", open a note to use this action");
             }
             chip.setOnClickListener(view -> {
+                final String toolKey = toolKeyForMode(chipMode);
+                if (toolKey != null && sessionManager.contains(toolKey)) {
+                    if (sessionManager.contains("main")) {
+                        sessionManager.minimize("main");
+                    }
+                    sessionManager.resume(toolKey);
+                    refreshSessionUi();
+                    return;
+                }
                 if (!hasCurrentFile && requiresCurrentFile) {
                     Toast.makeText(context, "Open a note to use " + mode[1] + ".",
                             Toast.LENGTH_SHORT).show();
@@ -822,7 +863,111 @@ public final class AiAssistantModule {
         horizontalScroll.addView(row);
         parent.addView(horizontalScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        activeSessionsStrip = AiUiTheme.actionRow(context);
+        activeSessionsStrip.setPadding(dp(context, 8), dp(context, 5), dp(context, 8), dp(context, 5));
+        activeSessionsStrip.setBackground(AiUiTheme.rounded(AiUiTheme.SURFACE,
+                dp(context, 16), AiUiTheme.ACCENT, dp(context, 1)));
+        final HorizontalScrollView activeSessionsScroll = new HorizontalScrollView(context);
+        activeSessionsScroll.setHorizontalScrollBarEnabled(false);
+        activeSessionsScroll.addView(activeSessionsStrip, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        parent.addView(activeSessionsScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        updateActiveSessionsStrip();
+        activeModeChips = chips;
+        updateActiveModeMarkers();
         return chips;
+    }
+
+    private static String toolKeyForMode(final String mode) {
+        switch (mode) {
+            case "teacher":
+                return "teacher";
+            case "mnemonics":
+                return "mnemonics";
+            case "tutor":
+                return "chat";
+            case "quiz":
+                return "quiz";
+            case "anki":
+                return "anki";
+            default:
+                return null;
+        }
+    }
+
+    private static String modeLabel(final String mode) {
+        switch (mode) {
+            case "teacher":
+                return "AI Teacher";
+            case "mnemonics":
+                return "Mnemonics";
+            case "tutor":
+                return "Tutor Chat";
+            case "quiz":
+                return "MCQ Quiz";
+            case "anki":
+                return "Anki CSV";
+            default:
+                return null;
+        }
+    }
+
+    private void updateActiveModeMarkers() {
+        if (activeModeChips == null) {
+            return;
+        }
+        for (TextView chip : activeModeChips) {
+            final Object tag = chip.getTag();
+            if (!(tag instanceof String)) {
+                continue;
+            }
+            final String mode = (String) tag;
+            final String label = modeLabel(mode);
+            final String toolKey = toolKeyForMode(mode);
+            if (label != null && toolKey != null) {
+                chip.setText(label + (sessionManager.contains(toolKey) ? " •" : ""));
+            }
+        }
+    }
+
+    private void updateActiveSessionsStrip() {
+        final android.content.Context context = getContext();
+        if (activeSessionsStrip == null || context == null) {
+            return;
+        }
+        activeSessionsStrip.removeAllViews();
+        boolean hasActiveTools = false;
+        for (AiSessionManager.SessionEntry entry : sessionManager.getEntries()) {
+            if (!"main".equals(entry.getToolKey())) {
+                hasActiveTools = true;
+                break;
+            }
+        }
+        activeSessionsStrip.setVisibility(hasActiveTools ? View.VISIBLE : View.GONE);
+        if (!hasActiveTools) {
+            return;
+        }
+        final TextView label = AiUiTheme.headerPill(context, "Active Sessions");
+        label.setClickable(false);
+        activeSessionsStrip.addView(label);
+        for (AiSessionManager.SessionEntry entry : sessionManager.getEntries()) {
+            if ("main".equals(entry.getToolKey())) {
+                continue;
+            }
+            final TextView shortcut = AiUiTheme.headerPill(context, entry.getDisplayLabel());
+            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36));
+            params.setMargins(dp(context, 4), 0, 0, 0);
+            activeSessionsStrip.addView(shortcut, params);
+            shortcut.setOnClickListener(view -> {
+                if (sessionManager.contains("main")) {
+                    sessionManager.minimize("main");
+                }
+                sessionManager.resume(entry.getToolKey());
+                refreshSessionUi();
+            });
+        }
     }
 
     private TextView createAllDiffsButton(final android.content.Context context) {
@@ -893,6 +1038,7 @@ public final class AiAssistantModule {
         final TextView settingsButton = AiUiTheme.headerAction(context, "⚙");
         settingsButton.setContentDescription("Sync Settings");
         titleRow.addView(settingsButton, new LinearLayout.LayoutParams(dp(context, 40), dp(context, 40)));
+        titleRow.addView(AiUiTheme.toolsAction(context, dialog, "GitHub Notes Sync"));
         titleRow.addView(AiUiTheme.minimizeAction(context, dialog, "GitHub Notes Sync"),
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, dp(context, 36)));
@@ -983,6 +1129,7 @@ public final class AiAssistantModule {
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.setDimAmount(0.64f);
         }
+        AiUiTheme.registerDialog(dialog, "GitHub Notes Sync");
         dialog.show();
         if (window != null) {
             final android.util.DisplayMetrics metrics = context.getResources().getDisplayMetrics();
@@ -2337,7 +2484,8 @@ public final class AiAssistantModule {
                 input -> {
                     activeInstructionInput = input;
                     startVoiceInput();
-                }, createOutputRefineRequest());
+                }, createOutputRefineRequest(),
+                (dialog, cleanup) -> sessionManager.setOnResetCleanup("teacher", cleanup));
     }
 
     private void appendToNotePreview(final EditText editText, final String original,

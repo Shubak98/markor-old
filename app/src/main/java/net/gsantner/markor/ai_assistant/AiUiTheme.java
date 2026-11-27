@@ -53,14 +53,19 @@ public final class AiUiTheme {
     }
 
     public interface DialogLifecycleHandler {
+        void onCreate(Dialog dialog, String label);
+
         void onMinimize(Dialog dialog, String label);
 
         void onDismiss(Dialog dialog);
+
+        void onSwitchToTools(Dialog dialog, String label);
     }
 
     public static final class MinimizableDialog extends Dialog {
         private Runnable onMinimize = () -> { };
         private Runnable onResume;
+        private Runnable onHide;
         private boolean minimized;
         private boolean dismissed;
 
@@ -78,8 +83,16 @@ public final class AiUiTheme {
             this.onResume = onResume;
         }
 
+        public void setOnHide(final Runnable onHide) {
+            this.onHide = onHide;
+        }
+
         public boolean isMinimized() {
             return minimized;
+        }
+
+        public void markMinimized() {
+            minimized = true;
         }
 
         public boolean isDismissed() {
@@ -106,6 +119,14 @@ public final class AiUiTheme {
                 onResume = null;
                 resumeCallback.run();
             }
+        }
+
+        @Override
+        public void hide() {
+            if (onHide != null) {
+                onHide.run();
+            }
+            super.hide();
         }
 
         @Override
@@ -151,13 +172,41 @@ public final class AiUiTheme {
         });
     }
 
+    public static void registerDialog(final Dialog dialog, final String label) {
+        final DialogLifecycleHandler handler = lifecycleHandlerFor(dialog);
+        if (handler != null) {
+            handler.onCreate(dialog, label);
+        }
+    }
+
+    public static TextView toolsAction(final Context context, final Dialog dialog,
+            final String label) {
+        final TextView action = headerPill(context, "⇄ Tools");
+        action.setContentDescription("Switch tools from " + label);
+        bindToolsAction(action, dialog);
+        return action;
+    }
+
+    public static void bindToolsAction(final View action, final Dialog dialog) {
+        action.setTag(dialog);
+        action.setOnClickListener(view -> {
+            final Object target = view.getTag();
+            final Dialog targetDialog = target instanceof Dialog ? (Dialog) target : null;
+            final DialogLifecycleHandler handler = lifecycleHandlerFor(targetDialog);
+            if (handler != null) {
+                handler.onSwitchToTools(targetDialog, String.valueOf(view.getContentDescription())
+                        .replace("Switch tools from ", ""));
+            }
+        });
+    }
+
     public static void minimizeDialog(final Context context, final Dialog dialog,
             final String label) {
         if (dialog == null) {
             return;
         }
         if (dialog instanceof MinimizableDialog) {
-            ((MinimizableDialog) dialog).minimized = true;
+            ((MinimizableDialog) dialog).markMinimized();
         }
         final DialogLifecycleHandler handler = lifecycleHandlerFor(dialog);
         if (handler != null) {
@@ -241,6 +290,7 @@ public final class AiUiTheme {
             window.setDimAmount(0.64f);
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
+        registerDialog(dialog, title);
         dialog.show();
         if (window != null) {
             final DisplayMetrics metrics = context.getResources().getDisplayMetrics();
@@ -281,6 +331,7 @@ public final class AiUiTheme {
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.setDimAmount(0.64f);
         }
+        registerDialog(dialog, title);
         dialog.show();
         if (window != null) {
             final DisplayMetrics metrics = context.getResources().getDisplayMetrics();
@@ -478,6 +529,9 @@ public final class AiUiTheme {
         titleParams.setMargins(dp(context, 10), 0, dp(context, 8), 0);
         row.addView(titleView, titleParams);
         if (dialog != null) {
+            if (isSessionToolLabel(title) && !"AI Assistant".equals(title)) {
+                addHeaderAction(context, row, toolsAction(context, dialog, title));
+            }
             addHeaderAction(context, row, minimizeAction(context, dialog, title));
         }
         header.addView(row, new LinearLayout.LayoutParams(
@@ -494,6 +548,15 @@ public final class AiUiTheme {
         header.addView(divider(context), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(context, 1)));
         return header;
+    }
+
+    private static boolean isSessionToolLabel(final String label) {
+        return "AI Assistant".equals(label) || "AI Voice Teacher".equals(label)
+                || "Mnemonics".equals(label) || "Tutor Chat".equals(label)
+                || "Mnemonic Preview".equals(label) || "Mnemonic Generator".equals(label)
+                || "MCQ Quiz".equals(label) || "Anki CSV Preview".equals(label)
+                || "Diff Preview".equals(label) || "AI Answer".equals(label)
+                || "GitHub Notes Sync".equals(label) || "All Diffs".equals(label);
     }
 
     private static TextView windowAction(final Context context, final String text,

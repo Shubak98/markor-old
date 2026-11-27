@@ -57,6 +57,10 @@ public final class AiVoiceTeacherDialog {
         void start(EditText input);
     }
 
+    public interface SessionRegistration {
+        void onCreated(Dialog dialog, Runnable onResetCleanup);
+    }
+
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
     private static final int ACTIVE_BACKGROUND = Color.rgb(50, 18, 24);
     private static final int ACTIVE_TEXT = Color.WHITE;
@@ -71,9 +75,23 @@ public final class AiVoiceTeacherDialog {
             final DoubtRequest doubtRequest, final SaveCallback saveCallback,
             final MicCallback micCallback,
             final AiOutputRefineHelper.RefineRequest refineRequest) {
+        return show(context, section, heading, lesson, style, styleChangeRequest, doubtRequest,
+                saveCallback, micCallback, refineRequest, null);
+    }
+
+    public static Dialog show(final Context context, final String section,
+            final String heading, final String lesson,
+            final AiVoiceTeacherHelper.TeacherStyle style, final StyleChangeRequest styleChangeRequest,
+            final DoubtRequest doubtRequest, final SaveCallback saveCallback,
+            final MicCallback micCallback,
+            final AiOutputRefineHelper.RefineRequest refineRequest,
+            final SessionRegistration sessionRegistration) {
         final Player player = new Player(context, section, heading, lesson, style,
                 styleChangeRequest, doubtRequest, saveCallback, micCallback, refineRequest);
         player.show();
+        if (sessionRegistration != null) {
+            sessionRegistration.onCreated(player.dialog, player::shutdownTts);
+        }
         return player.dialog;
     }
 
@@ -146,6 +164,9 @@ public final class AiVoiceTeacherDialog {
             title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
             header.addView(title, new LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            final TextView toolsButton = AiUiTheme.toolsAction(
+                    context, null, "AI Voice Teacher");
+            header.addView(toolsButton);
             hiChip = languageChip(context, "hi-IN");
             enChip = languageChip(context, "en-IN");
             header.addView(hiChip);
@@ -298,6 +319,8 @@ public final class AiVoiceTeacherDialog {
             final AiUiTheme.MinimizableDialog minimizableDialog =
                     new AiUiTheme.MinimizableDialog(context);
             dialog = minimizableDialog;
+            minimizableDialog.setOnHide(this::pause);
+            AiUiTheme.bindToolsAction(toolsButton, dialog);
             minimizableDialog.setOnMinimize(() -> {
                 pause();
                 AiUiTheme.minimizeDialog(context, dialog, "AI Voice Teacher");
@@ -352,12 +375,9 @@ public final class AiVoiceTeacherDialog {
             AiUiTheme.setOnDismissListener(dialog, ignored -> {
                 dismissed = true;
                 playing = false;
-                if (tts != null) {
-                    tts.stop();
-                    tts.shutdown();
-                    tts = null;
-                }
+                shutdownTts();
             });
+            AiUiTheme.registerDialog(dialog, "AI Voice Teacher");
         }
 
         private void show() {
@@ -611,6 +631,14 @@ public final class AiVoiceTeacherDialog {
                 tts.stop();
             }
             updatePlayButton();
+        }
+
+        private void shutdownTts() {
+            if (tts != null) {
+                tts.stop();
+                tts.shutdown();
+                tts = null;
+            }
         }
 
         private void updatePlayButton() {
