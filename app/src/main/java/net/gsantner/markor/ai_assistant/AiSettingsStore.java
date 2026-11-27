@@ -2,6 +2,8 @@ package net.gsantner.markor.ai_assistant;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Build;
+import android.provider.Settings;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -29,11 +31,14 @@ public final class AiSettingsStore {
     private static final String KEY_GITHUB_BRANCH = "github_branch";
     private static final String KEY_GITHUB_LOCAL_ROOT = "github_local_root";
     private static final String KEY_GITHUB_LAST_SYNC_MS = "github_last_sync_ms";
+    private static final String KEY_GITHUB_DEVICE_NAME = "github_device_name";
 
+    private final Context context;
     private final SharedPreferences preferences;
 
     public AiSettingsStore(final Context context) {
-        preferences = context.getApplicationContext()
+        this.context = context.getApplicationContext();
+        preferences = this.context
                 .getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE);
     }
 
@@ -42,8 +47,11 @@ public final class AiSettingsStore {
             throw new IllegalArgumentException("Context is required to export AI settings.");
         }
         final Context appContext = context.getApplicationContext();
-        return exportSettingsToJson(appContext.getSharedPreferences(
-                PREFERENCES_NAME, Context.MODE_PRIVATE).getAll());
+        final Map<String, Object> savedSettings = new LinkedHashMap<>(
+                appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE).getAll());
+        savedSettings.put(KEY_GITHUB_DEVICE_NAME,
+                new AiSettingsStore(appContext).getGitHubDeviceName());
+        return exportSettingsToJson(savedSettings);
     }
 
     static String exportSettingsToJson(final Map<String, ?> savedSettings) {
@@ -72,7 +80,8 @@ public final class AiSettingsStore {
         first = appendExportString(json, savedSettings, KEY_GITHUB_PAT, "", first);
         first = appendExportString(json, savedSettings, KEY_GITHUB_REPO, "", first);
         first = appendExportString(json, savedSettings, KEY_GITHUB_BRANCH, "main", first);
-        appendExportString(json, savedSettings, KEY_GITHUB_LOCAL_ROOT, "", first);
+        first = appendExportString(json, savedSettings, KEY_GITHUB_LOCAL_ROOT, "", first);
+        appendExportString(json, savedSettings, KEY_GITHUB_DEVICE_NAME, "", first);
         return json.append("\n}").toString();
     }
 
@@ -645,6 +654,15 @@ public final class AiSettingsStore {
         return trim(preferences.getString(KEY_GITHUB_LOCAL_ROOT, ""));
     }
 
+    public String getGitHubDeviceName() {
+        final String savedName = trim(preferences.getString(KEY_GITHUB_DEVICE_NAME, ""));
+        return savedName.isEmpty() ? defaultDeviceName(context) : savedName;
+    }
+
+    public void saveGitHubDeviceName(final String deviceName) {
+        preferences.edit().putString(KEY_GITHUB_DEVICE_NAME, trim(deviceName)).apply();
+    }
+
     public void saveGitHubLocalRootIfEmpty(final String localRoot) {
         if (getGitHubLocalRoot().isEmpty() && !trim(localRoot).isEmpty()) {
             preferences.edit().putString(KEY_GITHUB_LOCAL_ROOT, trim(localRoot)).apply();
@@ -667,6 +685,18 @@ public final class AiSettingsStore {
 
     public void saveGitHubLastSyncMs(final long timestampMs) {
         preferences.edit().putLong(KEY_GITHUB_LAST_SYNC_MS, timestampMs).apply();
+    }
+
+    private static String defaultDeviceName(final Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+            final String deviceName = Settings.Global.getString(
+                    context.getContentResolver(), Settings.Global.DEVICE_NAME);
+            if (!trim(deviceName).isEmpty()) {
+                return trim(deviceName);
+            }
+        }
+        final String manufacturerAndModel = trim(Build.MANUFACTURER) + " " + trim(Build.MODEL);
+        return manufacturerAndModel.trim();
     }
 
     private static String apiKeyKey(final AiProviderRouter.Provider provider) {

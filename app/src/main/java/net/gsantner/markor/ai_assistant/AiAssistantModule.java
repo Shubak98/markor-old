@@ -1579,6 +1579,15 @@ public final class AiAssistantModule {
         body.addView(branch);
         addVerticalGap(context, body, 10);
 
+        final EditText deviceName = new EditText(context);
+        deviceName.setSingleLine(true);
+        deviceName.setHint("My Phone");
+        styleInput(deviceName, context);
+        deviceName.setText(settingsStore.getGitHubDeviceName());
+        addSettingsLabel(context, body, "Device Name");
+        body.addView(deviceName);
+        addVerticalGap(context, body, 10);
+
         final EditText localRoot = new EditText(context);
         localRoot.setSingleLine(true);
         localRoot.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -1620,6 +1629,7 @@ public final class AiAssistantModule {
             settingsStore.saveGitHubSyncSettings(pat.getText().toString(),
                     repo.getText().toString(), branch.getText().toString(),
                     localRoot.getText().toString());
+            settingsStore.saveGitHubDeviceName(deviceName.getText().toString());
             dialog.dismiss();
             if (onSaved != null) {
                 onSaved.run();

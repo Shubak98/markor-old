@@ -30,4 +30,24 @@ public class GitHubNotesSyncHelperTest {
         assertThat(entry.getString("type")).isEqualTo("blob");
         assertThat(entry.get("sha")).isSameAs(JSONObject.NULL);
     }
+
+    @Test
+    public void conflictFilenameIncludesSanitizedRemoteDeviceName() {
+        assertThat(GitHubNotesSyncHelper.conflictFileName(
+                "Polity.md", "My Tablet", "20261127_2240", 0))
+                .isEqualTo("Polity_conflict_from_My_Tablet_20261127_2240.md");
+        assertThat(GitHubNotesSyncHelper.conflictFileName(
+                "Polity.md", "My Tablet/!", "20261127_2240", 0))
+                .isEqualTo("Polity_conflict_from_My_Tablet_20261127_2240.md");
+    }
+
+    @Test
+    public void extractsDeviceNameFromSyncCommitMessage() {
+        assertThat(GitHubNotesSyncHelper.extractDeviceNameFromCommitMessage(
+                "Markor sync [My Tablet]: update notes")).isEqualTo("My Tablet");
+        assertThat(GitHubNotesSyncHelper.extractDeviceNameFromCommitMessage(
+                "ordinary commit message")).isEqualTo("Other_Device");
+        assertThat(GitHubNotesSyncHelper.syncCommitMessage("My Tablet"))
+                .isEqualTo("Markor sync [My Tablet]: update notes");
+    }
 }

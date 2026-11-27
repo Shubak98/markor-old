@@ -183,7 +183,8 @@ public final class GitHubNotesSyncHelper {
             addEvent(events, callback, "Already up to date (0 changes)");
             return new SyncPlan(canonicalRoot, config, mode,
                     cachedRemoteTree(state, remoteHeadSha), new ArrayList<PlannedAction>(),
-                    state, events, new HashSet<String>(), 0, 0, scan.files, true);
+                    state, events, new HashSet<String>(), 0, scan.files, true,
+                    "Other_Device");
         }
         if (mode == SyncMode.TWO_WAY && remoteHeadSha != null
                 && remoteHeadSha.equals(state.lastSyncedCommitSha)) {
@@ -273,7 +274,7 @@ public final class GitHubNotesSyncHelper {
                     if (message != null) {
                         addEvent(events, callback, message);
                     }
-                    actions.add(new PlannedAction(path, action, local, remote));
+                    actions.add(new PlannedAction(path, action, local, remote, previousSha));
                 }
             } else if (action == SyncAction.PULL) {
                 if (mode == SyncMode.PUSH_ONLY) {
@@ -286,14 +287,13 @@ public final class GitHubNotesSyncHelper {
                     if (message != null) {
                         addEvent(events, callback, message);
                     }
-                    actions.add(new PlannedAction(path, action, local, remote));
+                    actions.add(new PlannedAction(path, action, local, remote, previousSha));
                 }
             } else if (action == SyncAction.CONFLICT) {
-                actions.add(new PlannedAction(path, action, local, remote));
+                actions.add(new PlannedAction(path, action, local, remote, previousSha));
                 conflicts++;
-                addEvent(events, callback, "⚠ conflict: " + path);
             } else if (action == SyncAction.DELETE_REMOTE || action == SyncAction.DELETE_LOCAL) {
-                actions.add(new PlannedAction(path, action, local, remote));
+                actions.add(new PlannedAction(path, action, local, remote, previousSha));
                 addEvent(events, callback, (action == SyncAction.DELETE_REMOTE
                         ? "🗑 Delete from GitHub: " : "🗑 Delete from This Device: ") + path);
             }
@@ -317,8 +317,11 @@ public final class GitHubNotesSyncHelper {
             addEvent(events, callback, summary.toString());
         }
 
+        final String remoteDeviceName = conflicts > 0
+                ? fetchRemoteDeviceName(config, remoteTree.headSha, events, callback)
+                : "Other_Device";
         return new SyncPlan(canonicalRoot, config, mode, remoteTree, actions, state,
-                events, oversizedPaths, skipped, conflicts, scan.files, false);
+                events, oversizedPaths, skipped, scan.files, false, remoteDeviceName);
     }
 
     private SyncReport performSync(final SyncPlan plan, final boolean applyDeletions,
@@ -410,14 +413,14 @@ public final class GitHubNotesSyncHelper {
         }
 
         final DownloadReport downloadReport = downloadActions(
-                plan, downloads, events, callback);
+                plan, downloads, pendingPushes, events, callback);
         pulled += downloadReport.pulled;
         currentFileModified |= downloadReport.currentFileModified;
 
         CommitSnapshot committed = null;
         if (!pendingPushes.isEmpty() || !remoteDeletions.isEmpty()) {
             committed = pushFilesInSingleCommit(plan.config, plan.remoteTree, pendingPushes,
-                    remoteDeletions, callback);
+                    remoteDeletions, settingsStore.getGitHubDeviceName(), callback);
             for (PendingPush pending : pendingPushes) {
                 setLastSynced(plan.state, pending.path, pending.local);
                 pushed++;
@@ -477,7 +480,7 @@ public final class GitHubNotesSyncHelper {
         settingsStore.saveGitHubLastSyncMs(syncTime);
         addEvent(events, callback, "🗑 Remote: " + remoteDeleted);
         addEvent(events, callback, "🗑 Local: " + localDeleted);
-        return new SyncReport(pushed, pulled, skipped, plan.conflictCount, events,
+        return new SyncReport(pushed, pulled, skipped, downloadReport.conflicts, events,
                 currentFileModified, syncTime, remoteDeleted, localDeleted,
                 deletedRemotePaths, deletedLocalPaths);
     }
@@ -550,6 +553,43 @@ public final class GitHubNotesSyncHelper {
             throw new IOException("GitHub returned an invalid branch commit SHA.");
         }
         return sha.toLowerCase(Locale.ROOT);
+    }
+
+    private String fetchRemoteDeviceName(final SyncConfig config, String headSha,
+            final List<String> events, final ProgressCallback callback) {
+        try {
+            if (headSha == null) {
+                headSha = fetchHeadCommit(config);
+            }
+            if (headSha == null) {
+                throw new IOException("The remote branch has no latest commit.");
+            }
+            final JSONObject response = requestJsonWithRetry("GET",
+                    API_ROOT + "/repos/" + config.repo + "/git/commits/" + headSha,
+                    null, config);
+            String message = response.optString("message", "");
+            if (message.isEmpty()) {
+                final JSONObject commit = response.optJSONObject("commit");
+                message = commit == null ? "" : commit.optString("message", "");
+            }
+            return extractDeviceNameFromCommitMessage(message);
+        } catch (IOException exception) {
+            addEvent(events, callback, "Could not read the remote device name; using Other_Device.");
+            return "Other_Device";
+        }
+    }
+
+    public static String extractDeviceNameFromCommitMessage(final String message) {
+        if (message == null) {
+            return "Other_Device";
+        }
+        final int open = message.indexOf('[');
+        final int close = open < 0 ? -1 : message.indexOf(']', open + 1);
+        if (open < 0 || close <= open + 1) {
+            return "Other_Device";
+        }
+        final String deviceName = message.substring(open + 1, close).trim();
+        return deviceName.isEmpty() ? "Other_Device" : deviceName;
     }
 
     private static TreeSnapshot cachedRemoteTree(final SyncState state, final String headSha) {
@@ -682,7 +722,7 @@ public final class GitHubNotesSyncHelper {
     private CommitSnapshot pushFilesInSingleCommit(final SyncConfig config,
             final TreeSnapshot remoteTree,
             final List<PendingPush> pendingPushes, final List<String> deletedPaths,
-            final ProgressCallback callback) throws IOException {
+            final String deviceName, final ProgressCallback callback) throws IOException {
         if (!remoteTree.branchExists && pendingPushes.isEmpty()) {
             throw new IOException("Cannot delete remote files because the GitHub branch is missing.");
         }
@@ -734,7 +774,7 @@ public final class GitHubNotesSyncHelper {
 
         final JSONObject commitRequest = new JSONObject();
         try {
-            commitRequest.put("message", "Markor sync: update notes");
+            commitRequest.put("message", syncCommitMessage(deviceName));
             commitRequest.put("tree", newTreeSha);
             final JSONArray parents = new JSONArray();
             if (remoteTree.headSha != null) {
@@ -750,6 +790,24 @@ public final class GitHubNotesSyncHelper {
                 commitResponse, "GitHub did not confirm the sync commit.");
         updateBranchReference(config, remoteTree.branchExists, commitSha);
         return new CommitSnapshot(commitSha, newTreeSha);
+    }
+
+    public static String syncCommitMessage(final String deviceName) {
+        final String safeName = sanitizeCommitDeviceName(deviceName);
+        return "Markor sync [" + safeName + "]: update notes";
+    }
+
+    private static String sanitizeCommitDeviceName(final String deviceName) {
+        final String input = deviceName == null ? "" : deviceName.trim();
+        final StringBuilder sanitized = new StringBuilder(input.length());
+        for (int index = 0; index < input.length(); index++) {
+            final char character = input.charAt(index);
+            if (!Character.isISOControl(character) && character != '[' && character != ']') {
+                sanitized.append(character);
+            }
+        }
+        final String result = sanitized.toString().trim();
+        return result.isEmpty() ? "This Device" : result;
     }
 
     static JSONObject createDeletionTreeEntry(final String path) throws JSONException {
@@ -853,12 +911,14 @@ public final class GitHubNotesSyncHelper {
     }
 
     private DownloadReport downloadActions(final SyncPlan plan,
-            final List<PlannedAction> downloads, final List<String> events,
+            final List<PlannedAction> downloads, final List<PendingPush> pendingPushes,
+            final List<String> events,
             final ProgressCallback callback) throws IOException {
         int pulled = 0;
+        int conflicts = 0;
         boolean currentFileModified = false;
         if (downloads.isEmpty()) {
-            return new DownloadReport(pulled, currentFileModified);
+            return new DownloadReport(pulled, conflicts, currentFileModified);
         }
         final ExecutorService executor = Executors.newFixedThreadPool(4);
         try {
@@ -882,21 +942,63 @@ public final class GitHubNotesSyncHelper {
                         currentFileModified |= isCurrentFile(destination);
                         addEvent(events, callback, "↓ pulled: " + action.path);
                     } else {
-                        final File conflictFile = createConflictFile(action.local.file, bytes);
+                        boolean autoMerged = false;
+                        if (plan.mode == SyncMode.TWO_WAY && action.previousSha != null
+                                && isTextFile(action.path)) {
+                            try {
+                                final byte[] baseBytes = fetchBlob(
+                                        plan.config, action.previousSha);
+                                final byte[] localBytes = readLimited(action.local.file);
+                                final ThreeWayTextMerge.MergeResult merge =
+                                        ThreeWayTextMerge.merge(
+                                                new String(baseBytes, StandardCharsets.UTF_8),
+                                                new String(localBytes, StandardCharsets.UTF_8),
+                                                new String(bytes, StandardCharsets.UTF_8));
+                                if (merge.isClean()) {
+                                    final byte[] mergedBytes = merge.getMergedText()
+                                            .getBytes(StandardCharsets.UTF_8);
+                                    final File destination = action.local.file;
+                                    writeAtomically(destination, mergedBytes);
+                                    final LocalFile mergedLocal = new LocalFile(destination,
+                                            computeGitBlobSha(mergedBytes), mergedBytes.length,
+                                            destination.lastModified());
+                                    pendingPushes.add(new PendingPush(action.path, mergedLocal));
+                                    currentFileModified |= isCurrentFile(destination);
+                                    addEvent(events, callback, "🔀 auto-merged: " + action.path);
+                                    autoMerged = true;
+                                }
+                            } catch (GitHubApiException exception) {
+                                if (exception.statusCode != 404) {
+                                    throw exception;
+                                }
+                            }
+                        }
+                        if (autoMerged) {
+                            continue;
+                        }
+                        final File conflictFile = createConflictFile(
+                                action.local.file, bytes, plan.remoteDeviceName);
                         final StateFile stateFile = plan.state.files.get(action.path);
                         if (stateFile != null) {
                             stateFile.lastSyncedSha = action.remote.sha;
                         }
                         addEvent(events, callback, "⚠ conflict: " + action.path
-                                + " (remote saved as "
+                                + " (saved as "
                                 + relativePath(plan.localRoot, conflictFile) + ")");
+                        conflicts++;
                     }
                 }
             }
         } finally {
             shutdownExecutor(executor);
         }
-        return new DownloadReport(pulled, currentFileModified);
+        return new DownloadReport(pulled, conflicts, currentFileModified);
+    }
+
+    private static boolean isTextFile(final String path) {
+        final String lowerPath = path.toLowerCase(Locale.ROOT);
+        return lowerPath.endsWith(".md") || lowerPath.endsWith(".txt")
+                || lowerPath.endsWith(".csv") || lowerPath.endsWith(".json");
     }
 
     private JSONObject requestJsonWithRetry(final String method, final String endpoint,
@@ -1078,13 +1180,15 @@ public final class GitHubNotesSyncHelper {
         }
     }
 
-    private File createConflictFile(final File localFile, final byte[] remoteBytes) throws IOException {
+    private File createConflictFile(final File localFile, final byte[] remoteBytes,
+            final String remoteDeviceName) throws IOException {
         final String name = localFile.getName();
         final String timestamp = new SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT)
                 .format(new Date());
         final File parent = localFile.getParentFile();
         for (int suffix = 0; ; suffix++) {
-            final String conflictName = conflictFileName(name, timestamp, suffix);
+            final String conflictName = conflictFileName(
+                    name, remoteDeviceName, timestamp, suffix);
             final File conflictFile = new File(parent, conflictName);
             if (!conflictFile.createNewFile()) {
                 continue;
@@ -1259,6 +1363,37 @@ public final class GitHubNotesSyncHelper {
         final String extension = extensionIndex > 0 ? name.substring(extensionIndex) : "";
         return basename + "_remote_conflict_" + timestamp
                 + (suffix == 0 ? "" : "_" + suffix) + extension;
+    }
+
+    public static String conflictFileName(final String name, final String remoteDeviceName,
+            final String timestamp, final int suffix) {
+        final int extensionIndex = name.lastIndexOf('.');
+        final String basename = extensionIndex > 0 ? name.substring(0, extensionIndex) : name;
+        final String extension = extensionIndex > 0 ? name.substring(extensionIndex) : "";
+        return basename + "_conflict_from_" + sanitizeDeviceNameForFilename(remoteDeviceName)
+                + "_" + timestamp + (suffix == 0 ? "" : "_" + suffix) + extension;
+    }
+
+    private static String sanitizeDeviceNameForFilename(final String deviceName) {
+        final String input = deviceName == null ? "" : deviceName.trim();
+        final StringBuilder sanitized = new StringBuilder(input.length());
+        boolean previousUnderscore = false;
+        for (int index = 0; index < input.length(); index++) {
+            final char character = input.charAt(index);
+            if (Character.isLetterOrDigit(character) || character == '-') {
+                sanitized.append(character);
+                previousUnderscore = false;
+            } else if (Character.isWhitespace(character) || character == '_') {
+                if (!previousUnderscore && sanitized.length() > 0) {
+                    sanitized.append('_');
+                }
+                previousUnderscore = true;
+            }
+        }
+        while (sanitized.length() > 0 && sanitized.charAt(sanitized.length() - 1) == '_') {
+            sanitized.setLength(sanitized.length() - 1);
+        }
+        return sanitized.length() == 0 ? "Other_Device" : sanitized.toString();
     }
 
     public static void removeEmptyParentDirectories(final File root, File parent)
@@ -1494,10 +1629,13 @@ public final class GitHubNotesSyncHelper {
 
     private static final class DownloadReport {
         private final int pulled;
+        private final int conflicts;
         private final boolean currentFileModified;
 
-        private DownloadReport(final int pulled, final boolean currentFileModified) {
+        private DownloadReport(final int pulled, final int conflicts,
+                final boolean currentFileModified) {
             this.pulled = pulled;
+            this.conflicts = conflicts;
             this.currentFileModified = currentFileModified;
         }
     }
@@ -1517,13 +1655,15 @@ public final class GitHubNotesSyncHelper {
         private final SyncAction action;
         private final LocalFile local;
         private final RemoteFile remote;
+        private final String previousSha;
 
         private PlannedAction(final String path, final SyncAction action,
-                final LocalFile local, final RemoteFile remote) {
+                final LocalFile local, final RemoteFile remote, final String previousSha) {
             this.path = path;
             this.action = action;
             this.local = local;
             this.remote = remote;
+            this.previousSha = previousSha;
         }
     }
 
@@ -1537,16 +1677,17 @@ public final class GitHubNotesSyncHelper {
         private final List<String> events;
         private final Set<String> oversizedPaths;
         private final int skippedCount;
-        private final int conflictCount;
         private final Map<String, LocalFile> localFiles;
         private final boolean fastNoOp;
+        private final String remoteDeviceName;
         private boolean executed;
 
         private SyncPlan(final File localRoot, final SyncConfig config, final SyncMode mode,
                 final TreeSnapshot remoteTree, final List<PlannedAction> actions,
                 final SyncState state, final List<String> events,
-                final Set<String> oversizedPaths, final int skippedCount, final int conflictCount,
-                final Map<String, LocalFile> localFiles, final boolean fastNoOp) {
+                final Set<String> oversizedPaths, final int skippedCount,
+                final Map<String, LocalFile> localFiles, final boolean fastNoOp,
+                final String remoteDeviceName) {
             this.localRoot = localRoot;
             this.config = config;
             this.mode = mode;
@@ -1556,9 +1697,9 @@ public final class GitHubNotesSyncHelper {
             this.events = events;
             this.oversizedPaths = oversizedPaths;
             this.skippedCount = skippedCount;
-            this.conflictCount = conflictCount;
             this.localFiles = localFiles;
             this.fastNoOp = fastNoOp;
+            this.remoteDeviceName = remoteDeviceName;
         }
 
         public List<String> getRemoteDeletionPaths() {
