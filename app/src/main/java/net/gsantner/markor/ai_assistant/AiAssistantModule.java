@@ -313,7 +313,7 @@ public final class AiAssistantModule {
 
                 @Override
                 public void onSwitchToTools(final Dialog dialog, final String label) {
-                    onSwitchToTools(dialog);
+                    AiAssistantModule.this.onSwitchToTools(dialog);
                 }
             };
         }
