@@ -30,6 +30,7 @@ public final class MarkdownTreeViewHelper {
         final LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         final Set<Integer> collapsed = new HashSet<>();
+        final Set<Integer> expandedBullets = new HashSet<>();
         final TextView toggle = new TextView(context);
         toggle.setText("Collapse All");
         toggle.setTextSize(12);
@@ -57,20 +58,23 @@ public final class MarkdownTreeViewHelper {
                         collapsed.add(section.getIndex());
                     }
                 }
+                expandedBullets.clear();
                 toggle.setText("Expand All");
             } else {
                 collapsed.clear();
+                expandedBullets.clear();
                 toggle.setText("Collapse All");
             }
-            render(context, tree, sections, listener, collapsed);
+            render(context, tree, sections, listener, collapsed, expandedBullets);
         });
-        render(context, tree, sections, listener, collapsed);
+        render(context, tree, sections, listener, collapsed, expandedBullets);
         return root;
     }
 
     private static void render(final Context context, final LinearLayout tree,
             final List<MarkdownSectionParser.Section> sections,
-            final SectionSelectionListener listener, final Set<Integer> collapsed) {
+            final SectionSelectionListener listener, final Set<Integer> collapsed,
+            final Set<Integer> expandedBullets) {
         tree.removeAllViews();
         for (MarkdownSectionParser.Section section : sections) {
             if (!isVisible(section, sections, collapsed)) {
@@ -119,7 +123,7 @@ public final class MarkdownTreeViewHelper {
                     } else {
                         collapsed.add(section.getIndex());
                     }
-                    render(context, tree, sections, listener, collapsed);
+                    render(context, tree, sections, listener, collapsed, expandedBullets);
                 });
                 row.addView(chevron, new LinearLayout.LayoutParams(
                         dp(context, 24), dp(context, 36)));
@@ -169,8 +173,90 @@ public final class MarkdownTreeViewHelper {
             final LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             rowParams.setMargins(0, 0, 0, dp(context, 7));
+
+            if (section.getBulletCount() > 0) {
+                final boolean bulletsExpanded = expandedBullets.contains(section.getIndex());
+                final TextView bulletToggle = new TextView(context);
+                bulletToggle.setText((bulletsExpanded ? "▾" : "▸") + " •"
+                        + section.getBulletCount());
+                bulletToggle.setTextSize(10);
+                bulletToggle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                bulletToggle.setTextColor(bulletsExpanded
+                        ? AiUiTheme.ACCENT : AiUiTheme.SECONDARY_TEXT);
+                bulletToggle.setGravity(Gravity.CENTER);
+                bulletToggle.setPadding(dp(context, 8), dp(context, 4),
+                        dp(context, 8), dp(context, 4));
+                bulletToggle.setBackground(AiUiTheme.rounded(AiUiTheme.SURFACE,
+                        dp(context, 14), bulletsExpanded
+                                ? AiUiTheme.ACCENT : AiUiTheme.SECONDARY_BORDER, dp(context, 1)));
+                bulletToggle.setContentDescription((bulletsExpanded
+                        ? "Collapse " : "Expand ") + section.getBulletCount()
+                        + " bullet points under " + section.getTitle());
+                bulletToggle.setClickable(true);
+                bulletToggle.setFocusable(true);
+                bulletToggle.setOnClickListener(view -> {
+                    if (bulletsExpanded) {
+                        expandedBullets.remove(section.getIndex());
+                    } else {
+                        expandedBullets.add(section.getIndex());
+                    }
+                    render(context, tree, sections, listener, collapsed, expandedBullets);
+                });
+                final LinearLayout.LayoutParams bulletToggleParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                bulletToggleParams.setMargins(dp(context, 6), 0, 0, 0);
+                row.addView(bulletToggle, bulletToggleParams);
+            }
+
             tree.addView(row, rowParams);
+            if (section.getBulletCount() > 0
+                    && expandedBullets.contains(section.getIndex())) {
+                for (MarkdownSectionParser.Section bullet : section.getBulletItems()) {
+                    addBulletCard(context, tree, section, bullet, listener);
+                }
+            }
         }
+    }
+
+    private static void addBulletCard(final Context context, final LinearLayout tree,
+            final MarkdownSectionParser.Section heading,
+            final MarkdownSectionParser.Section bullet,
+            final SectionSelectionListener listener) {
+        final LinearLayout row = new LinearLayout(context);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(context, 38));
+        row.setPadding(dp(context, 24 + Math.min(heading.getLevel() - 1, 3) * 12),
+                dp(context, 5), dp(context, 10), dp(context, 5));
+        row.setBackground(new RippleDrawable(ColorStateList.valueOf(AiUiTheme.ACCENT_PRESSED),
+                AiUiTheme.rounded(Color.rgb(18, 18, 24), dp(context, 8),
+                        AiUiTheme.DIVIDER, dp(context, 1)), null));
+
+        final TextView dot = new TextView(context);
+        dot.setText("•");
+        dot.setTextColor(AiUiTheme.ACCENT);
+        dot.setTextSize(16);
+        dot.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        row.addView(dot, new LinearLayout.LayoutParams(dp(context, 20),
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        final TextView preview = new TextView(context);
+        preview.setText(bullet.getTitle());
+        preview.setTextColor(Color.rgb(212, 212, 222));
+        preview.setTextSize(12);
+        preview.setMaxLines(2);
+        preview.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.addView(preview, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.setContentDescription("Bullet under " + heading.getTitle() + ": "
+                + bullet.getTitle());
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(view -> listener.onSelected(bullet));
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.setMargins(dp(context, 22), 0, 0, dp(context, 4));
+        tree.addView(row, params);
     }
 
     private static boolean isVisible(final MarkdownSectionParser.Section section,

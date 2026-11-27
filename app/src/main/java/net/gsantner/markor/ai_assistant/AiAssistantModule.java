@@ -592,7 +592,9 @@ public final class AiAssistantModule {
             }
             showScopePicker(context, editText.getText().toString(), section -> {
                 selectedSection[0] = section;
-                scopeChip.setText("📑 Section: " + section.getTitle() + "  ✕");
+                scopeChip.setText(section.isBullet()
+                        ? "📑 • " + section.getTitle() + "  ✕"
+                        : "📑 Section: " + section.getTitle() + "  ✕");
                 scopeChip.setVisibility(View.VISIBLE);
             });
         });
@@ -635,6 +637,8 @@ public final class AiAssistantModule {
             final MarkdownSectionParser.Section scopedSection = selectedSection[0];
             final String sourceMarkdown = scopedSection == null
                     ? originalMarkdown : scopedSection.getContent();
+            final String scopedInstruction = withBulletHeadingContext(
+                    instruction, scopedSection);
             if ("teacher".equals(requestedMode)) {
                 minimizeSession("main");
                 selectTeacherSource(editText, originalMarkdown, scopedSection);
@@ -671,7 +675,8 @@ public final class AiAssistantModule {
                                 sourceMarkdown, "Create 5 to 10 multiple-choice questions from the note. "
                                         + "Return strict JSON only: {\"questions\":[{\"question\":\"...\","
                                         + "\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctIndex\":0,"
-                                        + "\"explanation\":\"...\"}]}. User request: " + instruction,
+                                        + "\"explanation\":\"...\"}]}. User request: "
+                                        + scopedInstruction,
                                 attachedImage[0]);
                         final List<AiStudyDialogs.Question> questions = AiStudyDialogs.parseQuiz(rawQuiz);
                         MAIN_HANDLER.post(() -> {
@@ -689,7 +694,7 @@ public final class AiAssistantModule {
                         final String rawCards = new AiProviderRouter(settingsStore).generateStudyAnswer(
                                 sourceMarkdown, "Create useful Anki flashcards from this note. Return "
                                         + "strict JSON only: {\"cards\":[{\"front\":\"...\",\"back\":\"...\"}]}. "
-                                        + "User request: " + instruction, attachedImage[0]);
+                                        + "User request: " + scopedInstruction, attachedImage[0]);
                         final List<AnkiCsvHelper.Card> cards = AnkiCsvHelper.parseCards(rawCards);
                         final String csv = AnkiCsvHelper.toCsv(cards);
                         MAIN_HANDLER.post(() -> {
@@ -706,7 +711,7 @@ public final class AiAssistantModule {
                                         + "summarizes the note. Use simple alphanumeric node IDs and safe "
                                         + "labels without quotes, brackets, parentheses, or unescaped "
                                         + "special characters. Return only a ```mermaid fenced block. "
-                                        + "User request: " + instruction, attachedImage[0]);
+                                        + "User request: " + scopedInstruction, attachedImage[0]);
                         final String markdownDiagram = formatMermaid(diagram);
                         MAIN_HANDLER.post(() -> {
                             dialog.dismiss();
@@ -733,9 +738,11 @@ public final class AiAssistantModule {
                             ? "Transcribe the attached page or handwriting into clean structured Markdown. "
                                     + "Return it as an answer that can be reviewed and appended to the note.\n\n"
                                     + instruction : instruction;
+                    final String requestInstruction = withBulletHeadingContext(
+                            effectiveInstruction, scopedSection);
                     final String effectiveMode = hasImage ? "study" : requestedMode;
                     final AiProviderRouter.Result providerResult = new AiProviderRouter(settingsStore)
-                            .generateIntent(sourceMarkdown, effectiveInstruction, effectiveMode,
+                            .generateIntent(sourceMarkdown, requestInstruction, effectiveMode,
                                     folderContext, attachedImage[0]);
                     final GeminiMarkdownHelper.IntentResult result = providerResult.getIntentResult();
                     final String expectedMode = expectedIntentMode(effectiveMode);
@@ -2123,6 +2130,17 @@ public final class AiAssistantModule {
         cancel.setOnClickListener(view -> picker[0].dismiss());
     }
 
+    private static String withBulletHeadingContext(final String instruction,
+            final MarkdownSectionParser.Section section) {
+        if (section == null || !section.isBullet()
+                || section.getParentHeadingTitle().trim().isEmpty()) {
+            return instruction;
+        }
+        return instruction + "\n\nThe selected bullet \"" + section.getTitle()
+                + "\" belongs under the heading \"" + section.getParentHeadingTitle()
+                + "\". Keep the response scoped to this bullet.";
+    }
+
     private void startVoiceInput() {
         final Intent intent = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -2193,7 +2211,9 @@ public final class AiAssistantModule {
                         }
                         final String prompt = (history.length() == 0 ? "" : "Recent conversation:\n"
                                 + history + "\n")
-                                + "Answer the student's latest question clearly and use the note as context:\n"
+                                + withBulletHeadingContext(
+                                        "Answer the student's latest question clearly and use the note as context:",
+                                        scopedSection) + "\n"
                                 + question;
                         final String answer = new AiProviderRouter(settingsStore)
                                 .generateStudyAnswer(markdown, prompt, image);
@@ -2218,7 +2238,7 @@ public final class AiAssistantModule {
         AiMnemonicsDialog.show(context, markdown, currentFile, mnemonicsStore, selectedSection, section ->
                 new AiProviderRouter(settingsStore).generateNonTeacherRawCompletion(
                         section.getContent(), AiMnemonicsDialog.buildSystemPrompt(),
-                        "Create the mnemonic for this section."),
+                        withBulletHeadingContext("Create the mnemonic for this section.", section)),
                 new AiMnemonicsDialog.Actions() {
                     @Override
                     public void addToNote(final MarkdownSectionParser.Section section,
@@ -2390,6 +2410,14 @@ public final class AiAssistantModule {
         }
         final AiVoiceTeacherHelper.TeacherStyle selectedStyle = style == null
                 ? settingsStore.getTeacherStyle() : style;
+        final boolean selectedBullet = noteScope != null && noteScope.isBullet();
+        final String lessonContent = selectedBullet
+                ? "Parent heading: " + noteScope.getParentHeadingTitle()
+                        + "\n\nSelected bullet:\n" + section
+                : section;
+        final String lessonHeading = selectedBullet
+                ? noteScope.getParentHeadingTitle() + " • " + noteScope.getTitle()
+                : heading;
         final LinearLayout body = verticalLayout(context);
         final ProgressBar progress = new ProgressBar(context);
         progress.setIndeterminateTintList(ColorStateList.valueOf(AiUiTheme.ACCENT));
@@ -2407,7 +2435,7 @@ public final class AiAssistantModule {
                 final String lesson = AiVoiceTeacherHelper.cleanForTts(
                         new AiProviderRouter(settingsStore).generateTeacherText(
                                 AiVoiceTeacherHelper.SYSTEM_PROMPT,
-                                AiVoiceTeacherHelper.lessonPrompt(section, selectedStyle)));
+                                AiVoiceTeacherHelper.lessonPrompt(lessonContent, selectedStyle)));
                 if (lesson.trim().isEmpty()) {
                     throw new IOException("The AI provider returned an empty spoken lesson.");
                 }
@@ -2419,7 +2447,8 @@ public final class AiAssistantModule {
                         }
                         loadingDialog.dismiss();
                         showVoiceTeacherPlayer(
-                                editText, section, heading, lesson, selectedStyle, noteScope);
+                                editText, lessonContent, lessonHeading, lesson,
+                                selectedStyle, noteScope);
                     });
                 });
             } catch (IOException exception) {
