@@ -39,7 +39,12 @@ import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import net.gsantner.markor.ApplicationObject;
 import net.gsantner.markor.R;
+// >>> AI_ASSISTANT_HOOK_START
+import net.gsantner.markor.ai_assistant.AiPinnedStore;
+import net.gsantner.markor.ai_assistant.AiUiTheme;
+// <<< AI_ASSISTANT_HOOK_END
 import net.gsantner.opoc.util.GsCollectionUtils;
 import net.gsantner.opoc.util.GsContextUtils;
 import net.gsantner.opoc.util.GsFileUtils;
@@ -102,7 +107,15 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
     private final Map<File, Parcelable> _folderScrollMap = new HashMap<>();
     private final Stack<File> _backStack = new Stack<>();
     private final int _userId = getUserId();
+    // >>> AI_ASSISTANT_HOOK_START
+    private final AiPinnedStore _pinnedStore;
+    private final File _notebookRoot;
+    private final File _pinnedVirtualFolder;
+    // <<< AI_ASSISTANT_HOOK_END
     private long _prevModSum = 0;
+    // >>> AI_ASSISTANT_HOOK_START
+    private int _prevPinnedCount = -1;
+    // <<< AI_ASSISTANT_HOOK_END
 
     //########################
     //## Methods
@@ -113,6 +126,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         _adapterDataFiltered = new ArrayList<>();
         _currentSelection = new HashSet<>();
         _context = context;
+        // >>> AI_ASSISTANT_HOOK_START
+        _pinnedStore = new AiPinnedStore(context);
+        _notebookRoot = ApplicationObject.settings().getNotebookDirectory();
+        _pinnedVirtualFolder = AiPinnedStore.getPinnedVirtualFolder(_notebookRoot);
+        // <<< AI_ASSISTANT_HOOK_END
         GsContextUtils.instance.setAppLocale(_context, Locale.getDefault());
 
         // Prevents view flicker - https://stackoverflow.com/a/32488059
@@ -174,6 +192,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         _virtualMapping.put(VIRTUAL_STORAGE_RECENTS, VIRTUAL_STORAGE_RECENTS);
         _virtualMapping.put(VIRTUAL_STORAGE_POPULAR, VIRTUAL_STORAGE_POPULAR);
         _virtualMapping.put(VIRTUAL_STORAGE_FAVOURITE, VIRTUAL_STORAGE_FAVOURITE);
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isNotebookRoot(_dopt.rootFolder) && !_pinnedVirtualFolder.exists()) {
+            _virtualMapping.put(_pinnedVirtualFolder, _pinnedVirtualFolder);
+        }
+        // <<< AI_ASSISTANT_HOOK_END
     }
 
     @NonNull
@@ -184,10 +207,15 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
     }
 
     public boolean isCurrentFolderEmpty() {
-        return _adapterData.size() < 2;
+        return _adapterData.size() <= (_goUpFile == null ? 0 : 1);
     }
 
     public boolean isFileWriteable(File file, boolean isGoUp) {
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedVirtualFolder(file)) {
+            return false;
+        }
+        // <<< AI_ASSISTANT_HOOK_END
         return file != null && (canWrite(file) || isGoUp || _virtualMapping.containsKey(file));
     }
 
@@ -211,6 +239,12 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         final boolean isFile = displayFile.isFile();
 
         String titleText = displayFile.getName();
+        // >>> AI_ASSISTANT_HOOK_START
+        final boolean isPinnedEntry = isPinnedVirtualFolder(displayFile);
+        if (isPinnedEntry) {
+            titleText = "📌 Pinned (" + _pinnedStore.getPinnedCount() + ")";
+        }
+        // <<< AI_ASSISTANT_HOOK_END
         if (isCurrentFolderVirtual() && "index.html".equals(titleText)) {
             final String currentFolderName = _currentFolder != null ? _currentFolder.getName() : "";
             titleText += " [" + currentFolderName + "]";
@@ -218,7 +252,10 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
 
         // Set title
         holder.title.setText(isGoUp ? ".." : titleText, TextView.BufferType.SPANNABLE);
-        holder.title.setTextColor(ContextCompat.getColor(_context, _dopt.primaryTextColor));
+        // >>> AI_ASSISTANT_HOOK_START
+        holder.title.setTextColor(isPinnedEntry ? AiUiTheme.ACCENT
+                : ContextCompat.getColor(_context, _dopt.primaryTextColor));
+        // <<< AI_ASSISTANT_HOOK_END
 
         if (!isFileWriteable(displayFile, isGoUp) && !isVirtual && holder.title.length() > 0) {
             try {
@@ -228,11 +265,15 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         }
 
         // Set description
-        if (!_dopt.descModtimeInsteadOfParent || isGoUp) {
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedEntry) {
+            holder.description.setText("Pinned files and folders");
+        } else if (!_dopt.descModtimeInsteadOfParent || isGoUp) {
             holder.description.setText(file.getAbsolutePath());
         } else {
             holder.description.setText(formatFileDescription(file, _dopt.descriptionFormat));
         }
+        // <<< AI_ASSISTANT_HOOK_END
         holder.description.setTextColor(ContextCompat.getColor(_context, _dopt.secondaryTextColor));
 
         // Set icon
@@ -249,6 +290,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
                         isSelected ? _dopt.accentColor : isFile ? _dopt.fileColor : _dopt.folderColor),
                 android.graphics.PorterDuff.Mode.SRC_ATOP
         );
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedEntry) {
+            holder.image.setColorFilter(AiUiTheme.ACCENT);
+        }
+        // <<< AI_ASSISTANT_HOOK_END
 
         if (!isSelected && !isGoUp && isFavourite) {
             holder.image.setColorFilter(FAVOURITE_COLOR);
@@ -262,10 +308,7 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
 
         final int descriptionRes = isSelected ? _dopt.contentDescriptionSelected : (displayFile.isDirectory() ? _dopt.contentDescriptionFolder : _dopt.contentDescriptionFile);
         holder.itemRoot.setContentDescription((descriptionRes != 0 ? (_context.getString(descriptionRes) + " ") : "") + titleText + " " + holder.description.getText().toString());
-        holder.image.setOnLongClickListener(view -> {
-            Toast.makeText(_context, displayFile.getAbsolutePath(), Toast.LENGTH_SHORT).show();
-            return true;
-        });
+        holder.image.setOnLongClickListener(view -> holder.itemRoot.performLongClick());
 
         holder.itemRoot.setTag(new TagContainer(displayFile, position));
         holder.itemRoot.setOnClickListener(this);
@@ -379,6 +422,27 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         return _adapterDataFiltered.size();
     }
 
+    // >>> AI_ASSISTANT_HOOK_START
+    public int getSelectableItemCount() {
+        int count = _adapterDataFiltered.size();
+        if (_goUpFile != null && _adapterDataFiltered.contains(_goUpFile)) {
+            count--;
+        }
+        if (isPinnedVirtualFolder(_pinnedVirtualFolder)
+                && _adapterDataFiltered.contains(_pinnedVirtualFolder)) {
+            count--;
+        }
+        return count;
+    }
+
+    public void refreshPinnedEntry() {
+        final int position = _adapterDataFiltered.indexOf(_pinnedVirtualFolder);
+        if (position >= 0) {
+            notifyItemChanged(position);
+        }
+    }
+    // <<< AI_ASSISTANT_HOOK_END
+
     @Override
     public Filter getFilter() {
         return _filter;
@@ -454,6 +518,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
     public void selectAll() {
         for (int i = 0; i < _adapterDataFiltered.size(); i++) {
             final TagContainer data = new TagContainer(_adapterDataFiltered.get(i), i);
+            // >>> AI_ASSISTANT_HOOK_START
+            if (isPinnedVirtualFolder(data.file)) {
+                continue;
+            }
+            // <<< AI_ASSISTANT_HOOK_END
             if (!_currentSelection.contains(data.file)) {
                 if (data.file.isDirectory() && getCurrentFolder().getParentFile() != null && getCurrentFolder().getParentFile().equals(data.file)) {
                     continue;
@@ -497,6 +566,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         if (data == null) {
             return false;
         }
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedVirtualFolder(data.file)) {
+            return false;
+        }
+        // <<< AI_ASSISTANT_HOOK_END
 
         boolean clickHandled = false;
         if (data.file != null && _currentFolder != null && !data.file.equals(_goUpFile)) {
@@ -534,6 +608,13 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
             loadFolder(GO_BACK_SIGNIFIER, show);
             return true;
         }
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedVirtualFolder(_currentFolder)) {
+            _currentFolder = null;
+            loadFolder(_notebookRoot, null);
+            return true;
+        }
+        // <<< AI_ASSISTANT_HOOK_END
         return false;
     }
 
@@ -541,6 +622,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         if (_currentFolder == null) {
             return null;
         }
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedVirtualFolder(_currentFolder)) {
+            return _notebookRoot;
+        }
+        // <<< AI_ASSISTANT_HOOK_END
 
         final File parent = _currentFolder.getParentFile();
         if ((parent != null && parent.canWrite()) || GsFileUtils.isChild(VIRTUAL_STORAGE_ROOT, parent)) {
@@ -686,7 +772,13 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         if (_currentFolder.equals(new File("/"))) {
             newData.add(VIRTUAL_STORAGE_ROOT);
         } else if (_currentFolder.equals(VIRTUAL_STORAGE_ROOT)) {
-            newData.addAll(_virtualMapping.keySet());
+            for (File virtualFolder : _virtualMapping.keySet()) {
+                // >>> AI_ASSISTANT_HOOK_START
+                if (!_pinnedVirtualFolder.equals(virtualFolder)) {
+                    newData.add(virtualFolder);
+                }
+                // <<< AI_ASSISTANT_HOOK_END
+            }
 
             // SD Card and other external storage directories that are also not listable
             for (final Pair<File, String> p : GsContextUtils.instance.getAppDataPublicDirs(_context, false, true, false)) {
@@ -705,6 +797,11 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         } else if (_currentFolder.equals(VIRTUAL_STORAGE_FAVOURITE)) {
             newData.addAll(_dopt.favouriteFiles);
         }
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isPinnedVirtualFolder(_currentFolder)) {
+            newData.addAll(_pinnedStore.getPinnedFiles());
+        }
+        // <<< AI_ASSISTANT_HOOK_END
 
         if (_currentFolder.isDirectory() && _currentFolder.canRead()) {
             GsCollectionUtils.addAll(newData, _currentFolder.listFiles(GsFileBrowserListAdapter.this));
@@ -716,14 +813,28 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
         if (isCurrentFolderSortable()) {
             GsFileUtils.sortFiles(newData, _dopt.sortOrder);
         }
+        // >>> AI_ASSISTANT_HOOK_START
+        if (isNotebookRoot(_currentFolder) && !_pinnedVirtualFolder.exists()) {
+            newData.remove(_pinnedVirtualFolder);
+            newData.add(0, _pinnedVirtualFolder);
+        }
+        // <<< AI_ASSISTANT_HOOK_END
 
         // Testing if modtimes have changed (modtimes generally only increase)
         final long modSum = GsCollectionUtils.accumulate(newData, (f, s) -> s + f.lastModified(), 0L);
         final boolean modSumChanged = modSum != _prevModSum;
+        // >>> AI_ASSISTANT_HOOK_START
+        final int pinnedCount = isNotebookRoot(_currentFolder) ? _pinnedStore.getPinnedCount() : -1;
+        final boolean pinnedCountChanged = pinnedCount != _prevPinnedCount;
+        // <<< AI_ASSISTANT_HOOK_END
 
         final File goUp = getCurrentParent();
 
-        if (folderChanged || modSumChanged || !newData.equals(_adapterData)) {
+        boolean needsUiUpdate = folderChanged || modSumChanged || !newData.equals(_adapterData);
+        // >>> AI_ASSISTANT_HOOK_START
+        needsUiUpdate |= pinnedCountChanged;
+        // <<< AI_ASSISTANT_HOOK_END
+        if (needsUiUpdate) {
             final ArrayList<File> filteredData = new ArrayList<>();
             _filter._filter(newData, filteredData);
 
@@ -740,6 +851,9 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
                 _adapterDataFiltered.addAll(filteredData);
                 _currentSelection.retainAll(_adapterDataFiltered);
                 _prevModSum = modSum;
+                // >>> AI_ASSISTANT_HOOK_START
+                _prevPinnedCount = pinnedCount;
+                // <<< AI_ASSISTANT_HOOK_END
 
                 if (folderChanged) {
                     _fileIdMap.clear();
@@ -878,11 +992,28 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
 
     // Is the folder a virtual folder - does it contain links or other special items
     public static boolean isVirtualFolder(final File file) {
-        return VIRTUAL_STORAGE_RECENTS.equals(file) ||
+        if (VIRTUAL_STORAGE_RECENTS.equals(file) ||
                 VIRTUAL_STORAGE_FAVOURITE.equals(file) ||
                 VIRTUAL_STORAGE_POPULAR.equals(file) ||
-                VIRTUAL_STORAGE_ROOT.equals(file);
+                VIRTUAL_STORAGE_ROOT.equals(file)) {
+            return true;
+        }
+        // >>> AI_ASSISTANT_HOOK_START
+        return AiPinnedStore.isPinnedVirtualFolder(file);
+        // <<< AI_ASSISTANT_HOOK_END
     }
+
+    // >>> AI_ASSISTANT_HOOK_START
+    private boolean isPinnedVirtualFolder(final File folder) {
+        return isNotebookRoot(_dopt.rootFolder)
+                && AiPinnedStore.isPinnedVirtualFolder(folder, _notebookRoot)
+                && _virtualMapping.containsKey(folder);
+    }
+
+    private boolean isNotebookRoot(final File folder) {
+        return folder != null && _notebookRoot.equals(folder);
+    }
+    // <<< AI_ASSISTANT_HOOK_END
 
     public void showFileAfterNextLoad(final File file) {
         _fileToShowAfterNextLoad = file;
@@ -899,6 +1030,12 @@ public class GsFileBrowserListAdapter extends RecyclerView.Adapter<GsFileBrowser
     }
 
     public boolean isCurrentFolderSortable() {
-        return _currentFolder != null && !VIRTUAL_STORAGE_ROOT.equals(_currentFolder) && !VIRTUAL_STORAGE_RECENTS.equals(_currentFolder);
+        if (_currentFolder == null || VIRTUAL_STORAGE_ROOT.equals(_currentFolder)
+                || VIRTUAL_STORAGE_RECENTS.equals(_currentFolder)) {
+            return false;
+        }
+        // >>> AI_ASSISTANT_HOOK_START
+        return !isPinnedVirtualFolder(_currentFolder);
+        // <<< AI_ASSISTANT_HOOK_END
     }
 }

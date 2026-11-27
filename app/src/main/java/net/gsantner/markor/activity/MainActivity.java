@@ -366,6 +366,12 @@ public class MainActivity extends MarkorBaseActivity implements GsFileBrowserFra
 
     public String getFileBrowserTitle() {
         final File file = _notebook != null ? _notebook.getCurrentFolder() : null;
+        // >>> AI_ASSISTANT_HOOK_START
+        if (net.gsantner.markor.ai_assistant.AiPinnedStore.isPinnedVirtualFolder(
+                file, _appSettings.getNotebookDirectory())) {
+            return "📌 Pinned";
+        }
+        // <<< AI_ASSISTANT_HOOK_END
         if (file != null && !_appSettings.getNotebookDirectory().equals(file)) {
             return "> " + file.getName();
         } else {

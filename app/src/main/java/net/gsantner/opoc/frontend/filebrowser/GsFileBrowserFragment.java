@@ -40,6 +40,9 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import net.gsantner.markor.ApplicationObject;
 import net.gsantner.markor.R;
+// >>> AI_ASSISTANT_HOOK_START
+import net.gsantner.markor.ai_assistant.AiPinnedStore;
+// <<< AI_ASSISTANT_HOOK_END
 import net.gsantner.markor.format.FormatRegistry;
 import net.gsantner.markor.frontend.FileInfoDialog;
 import net.gsantner.markor.frontend.MarkorDialogFactory;
@@ -71,6 +74,9 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
     //## Static
     //########################
     public static final String FRAGMENT_TAG = "FilesystemViewerFragment";
+    // >>> AI_ASSISTANT_HOOK_START
+    private static final int MENU_PIN_TOGGLE = 0x0F000001;
+    // <<< AI_ASSISTANT_HOOK_END
 
     public static GsFileBrowserFragment newInstance() {
         return new GsFileBrowserFragment();
@@ -92,6 +98,9 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
     private MarkorContextUtils _cu;
     private Toolbar _toolbar;
     private boolean _reloadRequiredOnResume = true;
+    // >>> AI_ASSISTANT_HOOK_START
+    private AiPinnedStore _pinnedStore;
+    // <<< AI_ASSISTANT_HOOK_END
 
     //########################
     //## Methods
@@ -110,6 +119,9 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
         _emptyHint = root.findViewById(R.id.empty_hint);
 
         _appSettings = ApplicationObject.settings();
+        // >>> AI_ASSISTANT_HOOK_START
+        _pinnedStore = new AiPinnedStore(context);
+        // <<< AI_ASSISTANT_HOOK_END
         _cu = new MarkorContextUtils(root.getContext());
         final Activity activity = getActivity();
 
@@ -236,7 +248,7 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
     private void updateMenuItems() {
         final Set<File> selFiles = _filesystemViewerAdapter.getCurrentSelection();
         final int selCount = selFiles.size();
-        final int totalCount = _filesystemViewerAdapter.getItemCount() - 1;   // Account for ".."
+        final int totalCount = _filesystemViewerAdapter.getSelectableItemCount();
         final boolean selMulti1 = _dopt.doSelectMultiple && selCount == 1;
         final boolean selMultiMore = _dopt.doSelectMultiple && selCount > 1;
         final boolean selMultiAny = selMultiMore || selMulti1;
@@ -248,12 +260,25 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
         boolean selDirectoriesOnly = true;
         boolean selWritable = true;
         boolean allSelectedFav = true;
+        // >>> AI_ASSISTANT_HOOK_START
+        boolean allSelectedPinned = !selFiles.isEmpty();
+        boolean containsPinnedVirtualFolder = false;
+        // <<< AI_ASSISTANT_HOOK_END
         final Collection<File> favFiles = _dopt.favouriteFiles != null ? _dopt.favouriteFiles : Collections.emptySet();
         for (final File f : selFiles) {
             selTextFilesOnly &= FormatRegistry.isFileSupported(f, true);
             selWritable &= f.canWrite();
             selDirectoriesOnly &= f.isDirectory();
             allSelectedFav &= favFiles.contains(f);
+            // >>> AI_ASSISTANT_HOOK_START
+            containsPinnedVirtualFolder |= AiPinnedStore.isPinnedVirtualFolder(
+                    f, _appSettings.getNotebookDirectory());
+            if (!AiPinnedStore.isPinnedVirtualFolder(f, _appSettings.getNotebookDirectory())) {
+                allSelectedPinned &= _pinnedStore.isPinned(f);
+            } else {
+                allSelectedPinned = false;
+            }
+            // <<< AI_ASSISTANT_HOOK_END
         }
 
         if (_fragmentMenu != null && _fragmentMenu.findItem(R.id.action_delete_selected_items) != null) {
@@ -274,6 +299,13 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
             _fragmentMenu.findItem(R.id.action_create_shortcut).setVisible(selMulti1 && (selFilesOnly || selDirectoriesOnly));
             _fragmentMenu.findItem(R.id.action_check_all).setVisible(_filesystemViewerAdapter.areItemsSelected() && selCount < totalCount);
             _fragmentMenu.findItem(R.id.action_clear_selection).setVisible(_filesystemViewerAdapter.areItemsSelected());
+            // >>> AI_ASSISTANT_HOOK_START
+            final MenuItem pinItem = _fragmentMenu.findItem(MENU_PIN_TOGGLE);
+            if (pinItem != null) {
+                pinItem.setVisible(selMultiAny && !containsPinnedVirtualFolder);
+                pinItem.setTitle(allSelectedPinned ? "📌 Unpin" : "📌 Pin");
+            }
+            // <<< AI_ASSISTANT_HOOK_END
 
             final MenuItem sortItem = _fragmentMenu.findItem(R.id.action_sort);
             if (sortItem != null) {
@@ -346,6 +378,13 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         super.onCreateOptionsMenu(menu, inflater);
         inflater.inflate(R.menu.filesystem__menu, menu);
+        // >>> AI_ASSISTANT_HOOK_START
+        MenuItem pinItem = menu.findItem(MENU_PIN_TOGGLE);
+        if (pinItem == null) {
+            pinItem = menu.add(Menu.NONE, MENU_PIN_TOGGLE, Menu.NONE, "📌 Pin");
+            pinItem.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER);
+        }
+        // <<< AI_ASSISTANT_HOOK_END
         _cu.tintMenuItems(menu, true, Color.WHITE);
         _cu.setSubMenuIconsVisibility(menu, true);
 
@@ -409,6 +448,12 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
                 }
                 return true;
             }
+            // >>> AI_ASSISTANT_HOOK_START
+            case MENU_PIN_TOGGLE: {
+                toggleSelectedPins(currentSelection);
+                return true;
+            }
+            // <<< AI_ASSISTANT_HOOK_END
             case R.id.action_delete_selected_items: {
                 askForDeletingFilesRecursive((confirmed, data) -> {
                     if (confirmed) {
@@ -469,6 +514,33 @@ public class GsFileBrowserFragment extends GsFragmentBase<GsSharedPreferencesPro
 
         return false;
     }
+
+    // >>> AI_ASSISTANT_HOOK_START
+    private void toggleSelectedPins(final Set<File> selectedFiles) {
+        if (selectedFiles.isEmpty()) {
+            return;
+        }
+        boolean allPinned = true;
+        for (File file : selectedFiles) {
+            if (AiPinnedStore.isPinnedVirtualFolder(file, _appSettings.getNotebookDirectory())) {
+                return;
+            }
+            allPinned &= _pinnedStore.isPinned(file);
+        }
+        for (File file : selectedFiles) {
+            if (allPinned) {
+                _pinnedStore.unpin(file);
+            } else {
+                _pinnedStore.pin(file);
+            }
+        }
+        Toast.makeText(getContext(), allPinned ? "Unpinned" : "Pinned",
+                Toast.LENGTH_SHORT).show();
+        _filesystemViewerAdapter.unselectAll();
+        _filesystemViewerAdapter.reloadCurrentFolder();
+        _filesystemViewerAdapter.refreshPinnedEntry();
+    }
+    // <<< AI_ASSISTANT_HOOK_END
 
     private void executeSearchAction() {
         final File currentFolder = getCurrentFolder();

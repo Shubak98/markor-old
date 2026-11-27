@@ -137,3 +137,56 @@ aiAssistantModule.setViewModeVisible(show);
 ```
 
 The module constructor registers both the voice-recognition launcher and the Gallery/Files image picker before the fragment is started. No extra fragment lines are needed for the image picker. The floating button and menu item open the same multi-mode AI Assistant dialog. The `attachFloatingButton` hook passes the current document `File`, a callback for editor/WebView section jumps, and an `openFile(File)` callback. Applying a diff or appending an answer updates `_hlEditor`, saves the document, and refreshes the WebView preview when view mode is active. The assistant code and its tests remain self-contained in `ai_assistant/`.
+
+## Pin / Unpin browser hooks
+
+Copy `AiPinnedStore.java` and its unit test with the `ai_assistant/` package. The
+store uses the existing `markor_ai_assistant_prefs` preferences file and stores
+canonical paths in newest-first order. The virtual folder is only a reserved
+`File` path; no directory is created, so GitHub Sync never sees a Pinned folder.
+
+This checkout calls the browser classes `GsFileBrowserListAdapter.java` and
+`GsFileBrowserFragment.java` (not `FilesystemViewerAdapter` or
+`FilesystemViewerFragment`). Keep the marked hooks when porting the feature:
+
+* `GsFileBrowserListAdapter.java`
+  * Add the store/root/sentinel fields beside the other adapter members, then
+    initialize them in the constructor immediately after `_context = context`.
+  * In `updateVirtualFolders()`, after the existing Favourites mapping, map the
+    sentinel only when `_dopt.rootFolder` is the Notebook root and the reserved
+    path does not exist on disk.
+  * In `onBindViewHolder()`, replace the sentinel's display title with
+    `📌 Pinned (N)` and apply `AiUiTheme.ACCENT` to its title and icon.
+  * In `_loadFolder()`, after the Favourites listing branch, populate the
+    sentinel view from `getPinnedFiles()`. After sorting, insert the sentinel
+    at index `0` of `newData`, making it the first real Notebook-root entry
+    (the existing `..` parent row, when present, stays ahead of it). Exclude it
+    from `/storage`'s virtual-root list.
+  * In `selectAll()` and `toggleSelection()`, reject the sentinel. In
+    `isFileWriteable()`, report it as non-writable. In `getCurrentParent()`,
+    return the Notebook root for the sentinel. Include it in static
+    `isVirtualFolder()` and exclude it from `isCurrentFolderSortable()`.
+    `goBack()` also falls back to the Notebook root when the sentinel was
+    restored directly with no adapter back-stack entry.
+    `getSelectableItemCount()` excludes the parent and injected Pinned row so
+    the existing “Select all” menu state remains accurate.
+    `refreshPinnedEntry()` rebinds the root row after pin changes so its count
+    updates even though the root's file list itself is unchanged.
+* `GsFileBrowserFragment.java`
+  * Initialize the store in `onViewCreated()` immediately after
+    `_appSettings = ApplicationObject.settings()`.
+  * In `onCreateOptionsMenu()`, add the action immediately after inflating
+    `R.menu.filesystem__menu`. Update its title and visibility in
+    `updateMenuItems()` alongside the other selection actions; handle its ID in
+    `onOptionsItemSelected()` beside the Favourite cases. The handler pins or
+    unpins the selected real paths, displays the toast, clears selection, and
+    reloads the current folder.
+* `MainActivity.java`
+  * In `getFileBrowserTitle()`, immediately after reading the current folder
+    from `_notebook`, recognize the sentinel and display `📌 Pinned` instead
+    of its reserved path name. Existing fragment Back handling and the
+    adapter's parent row navigate back to the Notebook root.
+
+The inserted browser code is delimited by
+`// >>> AI_ASSISTANT_HOOK_START` and `// <<< AI_ASSISTANT_HOOK_END`. Preserve
+those markers and avoid creating the sentinel path on disk.
